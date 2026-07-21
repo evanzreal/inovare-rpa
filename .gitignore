@@ -1,0 +1,9 @@
+.venv/
+.perfil_chrome/
+.perfil_chrome_backup_pre_vps/
+__pycache__/
+*.pyc
+saidas/
+.env
+*.log
+reuniao_*.md
