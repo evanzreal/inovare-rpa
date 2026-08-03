@@ -6,7 +6,12 @@ URL = "https://portalb2b.movida.com.br/relatorios/pedidos"
 
 with abrir_navegador(headless=False) as ctx:
     page = ctx.new_page()
-    page.goto(URL, wait_until="networkidle", timeout=60000)
+    page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+    # espera o Angular renderizar as linhas da tabela
+    try:
+        page.wait_for_selector("mat-row, tr.mat-row, [role='row']", timeout=20000)
+    except Exception:
+        pass
     page.wait_for_timeout(3000)
 
     info = page.evaluate("""() => {
