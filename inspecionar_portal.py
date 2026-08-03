@@ -7,12 +7,18 @@ URL = "https://portalb2b.movida.com.br/relatorios/pedidos"
 with abrir_navegador(headless=False) as ctx:
     page = ctx.new_page()
     page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-    # espera o Angular renderizar as linhas da tabela
+    page.wait_for_timeout(8000)
+    titulo = page.title()
+    print(f"Titulo da pagina: {titulo}")
+    page.screenshot(path="saidas/inspecao_portal.png", full_page=True)
+    print("Screenshot salvo em saidas/inspecao_portal.png")
+    corpo = page.evaluate("() => document.body.innerText.slice(0, 500)")
+    print(f"Corpo (500 chars): {corpo}")
     try:
-        page.wait_for_selector("mat-row, tr.mat-row, [role='row']", timeout=20000)
-    except Exception:
-        pass
-    page.wait_for_timeout(3000)
+        page.wait_for_selector("mat-row, tr.mat-row, [role='row']", timeout=10000)
+    except Exception as e:
+        print(f"Timeout esperando linhas: {e}")
+    page.wait_for_timeout(2000)
 
     info = page.evaluate("""() => {
         const inputs = [...document.querySelectorAll('input')].map(el => ({
