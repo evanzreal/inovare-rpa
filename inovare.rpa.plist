@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>inovare.rpa</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/macbook/inovare-rpa/start_server.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/macbook/inovare-rpa</string>
+
+    <!-- Reinicia automaticamente se cair -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Inicia junto com o login do usuário -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Logs -->
+    <key>StandardOutPath</key>
+    <string>/Users/macbook/inovare-rpa/logs/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/macbook/inovare-rpa/logs/server_err.log</string>
+
+    <!-- Espera 5s antes de reiniciar após crash -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>
