@@ -111,6 +111,14 @@ async def credito_movida(req: CreditoRequest):
         )
 
         if req.ler_resultado and req.enviar:
+            # Extrai o leadId retornado pela Movida para confirmar a linha correta no portal
+            lead_id = None
+            try:
+                import json as _json
+                lead_id = str(_json.loads(envio.resposta).get("leadId", ""))
+            except Exception:
+                pass
+
             credito = await loop.run_in_executor(
                 _executor,
                 lambda: ler_resultado(
@@ -118,6 +126,7 @@ async def credito_movida(req: CreditoRequest):
                     context=_context,
                     nome=req.nome,
                     aguardar_s=20,
+                    lead_id=lead_id,
                 ),
             )
             return {"envio": asdict(envio), "credito": asdict(credito)}
