@@ -21,6 +21,7 @@ from rpa.navegador import PERFIL, _CHROME_ARGS
 from rpa.fluxos.analise_credito.movida.parte1_envio import enviar_lead
 from rpa.fluxos.analise_credito.movida.parte2_resultado import ler_resultado
 from rpa.fluxos.analise_credito.movida import config as movida_config
+from rpa.fluxos.analise_credito.b2e.pesquisa import buscar as b2e_buscar
 
 _context = None
 _playwright = None
@@ -83,13 +84,154 @@ async def status():
     return {"browser": "online" if _context else "offline"}
 
 
+@app.get("/debug/b2e/{cpf}")
+async def debug_b2e(cpf: str):
+    """Busca CPF no portal B2E e retorna screenshot + texto completo da página."""
+    if not _context:
+        raise HTTPException(503, detail="Browser nao inicializado")
+
+    def _buscar():
+        import base64
+        from rpa.util import so_digitos
+        cpf_limpo = so_digitos(cpf)
+        page = _context.new_page()
+        try:
+            # Navega diretamente com CPF na querystring (form é GET server-side)
+            url = f"https://webantifraudes.b2egroup.com.br/Web/Pesquisa?IDENTIFICADOR={cpf_limpo}"
+            page.goto(url, wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(1500)
+
+            shot = "/tmp/b2e_resultado.png"
+            page.screenshot(path=shot, full_page=True)
+
+            # Lê tabela diretamente do DOM (HTML server-rendered, não Angular)
+            linhas = page.evaluate("""() => {
+                const rows = [...document.querySelectorAll('table tbody tr')];
+                return rows.map(tr => ({
+                    colunas: [...tr.querySelectorAll('td')].map(td => td.innerText.trim())
+                }));
+            }""")
+
+            img_b64 = base64.standard_b64encode(open(shot, "rb").read()).decode()
+            return {
+                "cpf_buscado": cpf_limpo,
+                "url_usada": url,
+                "linhas": linhas,
+                "screenshot_b64": img_b64,
+            }
+        finally:
+            page.close()
+
+    async with _lock:
+        loop = asyncio.get_event_loop()
+        resultado = await loop.run_in_executor(_executor, _buscar)
+
+    # Salva screenshot localmente para visualização
+    import base64
+    shot_path = "/tmp/b2e_resultado.png"
+    with open(shot_path, "wb") as f:
+        f.write(base64.standard_b64decode(resultado.pop("screenshot_b64")))
+    resultado["screenshot"] = shot_path
+    return resultado
+
+
+@app.get("/debug/navegar")
+async def debug_navegar(url: str):
+    """Abre URL na primeira aba do browser."""
+    if not _context:
+        raise HTTPException(503, detail="Browser nao inicializado")
+    def _nav():
+        page = _context.pages[0]
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(2000)
+        return {"url": page.url, "titulo": page.title()}
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_executor, _nav)
+
+
+@app.get("/debug/b2e-login")
+async def debug_b2e_login():
+    """Clica em Entrar/Login no portal B2E."""
+    if not _context:
+        raise HTTPException(503, detail="Browser nao inicializado")
+    def _login():
+        import base64
+        page = _context.pages[0]
+        page.wait_for_timeout(1000)
+
+        # Tira screenshot antes para diagnóstico
+        shot_antes = "/tmp/b2e_antes_login.png"
+        page.screenshot(path=shot_antes)
+
+        # Lista todos botões e links visíveis
+        elementos = page.evaluate("""() =>
+            [...document.querySelectorAll('button, a, input[type=submit], input[type=button]')]
+            .filter(e => e.offsetParent !== null)
+            .map(e => ({ tag: e.tagName, text: e.innerText || e.value, href: e.href || '', id: e.id }))
+        """)
+
+        # Tenta clicar em qualquer coisa que pareça login/entrar
+        clicou = False
+        for tentativa in [
+            lambda: page.get_by_role("button", name="Entrar").click(timeout=5000),
+            lambda: page.get_by_role("button", name="Login").click(timeout=5000),
+            lambda: page.get_by_text("Entrar").click(timeout=5000),
+            lambda: page.locator("input[type=submit]").click(timeout=5000),
+            lambda: page.locator("button").first.click(timeout=5000),
+        ]:
+            try:
+                tentativa()
+                clicou = True
+                break
+            except Exception:
+                pass
+
+        page.wait_for_timeout(4000)
+        shot_depois = "/tmp/b2e_depois_login.png"
+        page.screenshot(path=shot_depois)
+
+        return {
+            "url": page.url,
+            "titulo": page.title(),
+            "clicou": clicou,
+            "elementos_visiveis": elementos[:20],
+        }
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_executor, _login)
+
+
+@app.get("/debug/tabs")
+async def debug_tabs():
+    if not _context:
+        raise HTTPException(503, detail="Browser nao inicializado")
+    def _listar():
+        return [{"index": i, "url": p.url, "titulo": p.title()} for i, p in enumerate(_context.pages)]
+    loop = asyncio.get_event_loop()
+    tabs = await loop.run_in_executor(_executor, _listar)
+    return {"tabs": tabs}
+
+
+@app.post("/credito/b2e")
+async def credito_b2e(req: ResultadoRequest):
+    """Busca CPF no portal antifraude B2E e retorna o status mais recente."""
+    if not _context:
+        raise HTTPException(503, detail="Browser nao inicializado")
+    async with _lock:
+        loop = asyncio.get_event_loop()
+        resultado = await loop.run_in_executor(
+            _executor,
+            lambda: b2e_buscar(cpf=req.cpf, context=_context),
+        )
+    return asdict(resultado)
+
+
 @app.post("/credito/movida")
 async def credito_movida(req: CreditoRequest):
     """
     Parte 1: preenche o formulario de analise de credito na Movida.
     - enviar=false (padrao): dry-run, nao submete o lead.
     - enviar=true: cria o lead de verdade.
-    - ler_resultado=true: apos enviar, aguarda ~20s e le o Status Reserva no portal (requer login B2B).
+    - ler_resultado=true: apos enviar, aguarda ~20s e le o Status Reserva no portal (requer login B2B) e consulta o B2E.
     """
     if not _context:
         raise HTTPException(503, detail="Browser nao inicializado")
@@ -111,7 +253,6 @@ async def credito_movida(req: CreditoRequest):
         )
 
         if req.ler_resultado and req.enviar:
-            # Extrai o leadId retornado pela Movida para confirmar a linha correta no portal
             lead_id = None
             try:
                 import json as _json
@@ -119,7 +260,7 @@ async def credito_movida(req: CreditoRequest):
             except Exception:
                 pass
 
-            credito = await loop.run_in_executor(
+            credito_movida_res = await loop.run_in_executor(
                 _executor,
                 lambda: ler_resultado(
                     documento=req.cpf,
@@ -129,7 +270,17 @@ async def credito_movida(req: CreditoRequest):
                     lead_id=lead_id,
                 ),
             )
-            return {"envio": asdict(envio), "credito": asdict(credito)}
+
+            credito_b2e_res = await loop.run_in_executor(
+                _executor,
+                lambda: b2e_buscar(cpf=req.cpf, context=_context),
+            )
+
+            return {
+                "envio": asdict(envio),
+                "movida": asdict(credito_movida_res),
+                "b2e": asdict(credito_b2e_res),
+            }
 
     return asdict(envio)
 
