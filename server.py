@@ -22,6 +22,10 @@ from rpa.fluxos.analise_credito.movida.parte1_envio import enviar_lead
 from rpa.fluxos.analise_credito.movida.parte2_resultado import ler_resultado
 from rpa.fluxos.analise_credito.movida import config as movida_config
 from rpa.fluxos.analise_credito.b2e.pesquisa import buscar as b2e_buscar
+from rpa.fluxos.analise_credito.localiza.caminho import Localiza as LocalizaCaminho
+from rpa.modelos import Cliente
+
+_localiza = LocalizaCaminho()
 
 _context = None
 _playwright = None
@@ -52,10 +56,30 @@ def _fechar_browser():
         _playwright.stop()
 
 
+async def _keepalive_localiza():
+    """Clica na aba Localiza a cada 60s para manter a sessão ativa."""
+    while True:
+        await asyncio.sleep(60)
+        if not _context:
+            continue
+        def _click():
+            for page in _context.pages:
+                if "localiza" in page.url.lower():
+                    try:
+                        page.mouse.move(400, 300)
+                        page.mouse.click(400, 300)
+                    except Exception:
+                        pass
+                    return
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(_executor, _click)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(_executor, _abrir_browser)
+    asyncio.create_task(_keepalive_localiza())
     yield
     await loop.run_in_executor(_executor, _fechar_browser)
 
@@ -221,6 +245,28 @@ async def credito_b2e(req: ResultadoRequest):
         resultado = await loop.run_in_executor(
             _executor,
             lambda: b2e_buscar(cpf=req.cpf, context=_context),
+        )
+    return asdict(resultado)
+
+
+class LocalizaRequest(BaseModel):
+    nome: str
+    cpf: str
+
+
+@app.post("/credito/localiza")
+async def credito_localiza(req: LocalizaRequest):
+    """Cria lead no Localiza Meoo Revendas e lê o resultado da pré-análise."""
+    if not _context:
+        raise HTTPException(503, detail="Browser nao inicializado")
+    async with _lock:
+        loop = asyncio.get_event_loop()
+        resultado = await loop.run_in_executor(
+            _executor,
+            lambda: _localiza.consultar(
+                Cliente(nome=req.nome, documento=req.cpf),
+                _context,
+            ),
         )
     return asdict(resultado)
 

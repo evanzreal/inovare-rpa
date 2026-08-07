@@ -1,26 +1,71 @@
 """
-Localiza · caminho de analise de credito.  [⏳ TODO]
+Localiza Meoo Revendas · Criação de lead + leitura de pré-análise.
 
-Da reuniao:
-  - Aceita CPF E CNPJ (Movida so CPF). Analise automatica, ~10-15s.
-  - Login com senha (sessao cai se ficar inativa -> manter script ativo).
-  - Formatacao OBRIGATORIA com pontos/traco no CPF/CNPJ.
-  - APROVADO -> TRAVAR o cliente (reserva 15 dias):
-      converter -> nova proposta -> escolher carro padrao -> pintura solida
-      -> calcular -> adicionar -> salvar -> enviar por e-mail.
-  - Quer travar TODOS os aprovados (inclusive os ultimos ~2-3 meses) e re-travar
-    periodicamente pra ninguem ser liberado.
-  - Localiza e rigorosa com valor (mensalidade alta dificil de aprovar).
+Portal: https://localiza.my.site.com/meoorevendas/s/  (Salesforce Experience Cloud)
 
-Login feito pelo Guilherme em 2026-06-26.
-Portal (Salesforce Experience Cloud): https://localiza.my.site.com/meoorevendas/s/
+Fluxo:
+1. Nova aba → navega para o portal (cookies da sessão persistente já estão lá)
+2. Clica em Criar
+3. Tela 1: preenche CPF formatado (xxx.xxx.xxx-xx) → Avançar
+4. Tela 2: preenche nome, celular, email, telefone, email_revenda, descrição → Avançar
+5. Aguarda "Lead criado com sucesso!" → clica "Ir para o lead"
+6. Polling reload até "Status da Pré-análise de Crédito" = Concluída (~10-15s)
+7. Lê "Resultado Pré-análise" → Aprovado / Reprovado
 
-PENDENTE: paginas internas de consulta, badge de status e sequencia de travamento.
+Obs:
+- CPF obrigatoriamente formatado com pontos/traço.
+- Dados fixos de contato (celular, email etc.) definidos neste arquivo.
+- Se sessão expirar, o fluxo lança exceção (login manual necessário).
 """
 
-from ....modelos import Cliente, ResultadoCredito
+import re
+
+from ....modelos import (
+    Cliente,
+    ResultadoCredito,
+    STATUS_APROVADO,
+    STATUS_REPROVADO,
+    STATUS_PENDENTE,
+    STATUS_ERRO,
+)
+from ....util import so_digitos
 
 PORTAL = "https://localiza.my.site.com/meoorevendas/s/"
+
+_CELULAR         = "(11)98888-7777"
+_EMAIL_PROSPECT  = "xxx@gmail.com"
+_TELEFONE        = "(99)9999-9999"
+_EMAIL_REVENDA   = "priscila.oliveira@inovareseguros.com"
+_DESCRICAO       = "xxx"
+
+
+def _formatar_doc(doc: str) -> str:
+    d = so_digitos(doc)
+    if len(d) == 11:
+        return f"{d[:3]}.{d[3:6]}.{d[6:9]}-{d[9:]}"
+    return f"{d[:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:]}"
+
+
+def _mapear(texto: str) -> str:
+    t = texto.lower()
+    if "aprovado" in t:
+        return STATUS_APROVADO
+    if "reprovado" in t or "recusado" in t or "negado" in t or "fora do perfil" in t:
+        return STATUS_REPROVADO
+    return STATUS_PENDENTE
+
+
+def _fill(page, label: str, valor: str) -> bool:
+    try:
+        page.get_by_label(label, exact=False).first.fill(valor, timeout=4000)
+        return True
+    except Exception:
+        return False
+
+
+def _extrair(texto: str, campo: str) -> str:
+    m = re.search(rf'{re.escape(campo)}\s+([^\n]+)', texto)
+    return m.group(1).strip() if m else ""
 
 
 class Localiza:
@@ -28,8 +73,73 @@ class Localiza:
     automatico = True
 
     def consultar(self, cliente: Cliente, context, *, enviar: bool = False) -> ResultadoCredito:
-        raise NotImplementedError("Localiza ainda nao implementada (ver docstring).")
+        cpf_fmt = _formatar_doc(cliente.documento)
+        cpf_dig = so_digitos(cliente.documento)
+        page = context.new_page()
 
-    def travar_cliente(self, cliente: Cliente, context):
-        """Reserva o cliente aprovado por 15 dias. [⏳ TODO]"""
-        raise NotImplementedError("Travamento de cliente na Localiza ainda nao implementado.")
+        try:
+            page.goto(PORTAL, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(3000)
+
+            # Clica em Criar
+            page.get_by_role("button", name="Criar").click(timeout=10000)
+            page.wait_for_timeout(2000)
+
+            # Tela 1: CPF
+            page.locator("input[placeholder*='CPF']").first.fill(cpf_fmt, timeout=10000)
+            page.get_by_role("button", name="Avançar").click(timeout=10000)
+            page.wait_for_timeout(2500)
+
+            # Tela 2: dados do lead
+            _fill(page, "Nome",              cliente.nome)
+            _fill(page, "Celular",           _CELULAR)
+            _fill(page, "Email do prospect", _EMAIL_PROSPECT)
+            _fill(page, "Telefone",          _TELEFONE)
+            _fill(page, "Email da revenda",  _EMAIL_REVENDA)
+            _fill(page, "Descrição",         _DESCRICAO)
+
+            page.wait_for_timeout(500)
+            page.get_by_role("button", name="Avançar").click(timeout=10000)
+
+            # Aguarda banner de sucesso
+            page.wait_for_selector("text=Lead criado com sucesso", timeout=30000)
+
+            # Navega para o lead
+            page.get_by_text("Ir para o lead", exact=False).click(timeout=10000)
+            page.wait_for_url(
+                lambda u: "/lead/" in u.lower(),
+                timeout=30000,
+            )
+            page.wait_for_timeout(3000)
+
+            # Polling: aguarda pré-análise concluir (Salesforce leva ~10-20s)
+            resultado_raw = ""
+            status_pre    = ""
+            for _ in range(12):
+                texto = page.evaluate("() => document.body.innerText") or ""
+                resultado_raw = _extrair(texto, "Resultado Pré-análise")
+                status_pre    = _extrair(texto, "Status da Pré-análise de Crédito")
+                if "conclu" in status_pre.lower():
+                    break
+                page.wait_for_timeout(5000)
+                try:
+                    page.reload(wait_until="networkidle", timeout=30000)
+                except Exception:
+                    pass
+
+            return ResultadoCredito(
+                status=_mapear(resultado_raw or status_pre),
+                locadora="localiza",
+                documento=cpf_dig,
+                detalhe=f"{resultado_raw} | pré-análise: {status_pre}",
+            )
+
+        except Exception as exc:
+            return ResultadoCredito(
+                status=STATUS_ERRO,
+                locadora="localiza",
+                documento=cpf_dig,
+                detalhe=str(exc),
+            )
+        finally:
+            page.close()
