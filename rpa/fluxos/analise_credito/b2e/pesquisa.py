@@ -155,12 +155,19 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
         cols = linhas[0]
         status_raw = cols[5] if len(cols) > 5 else cols[-1]
 
+    # Captura o nome do cliente do link antes de clicar
+    nome_cliente = ""
+    try:
+        nome_cliente = page.locator("table tbody tr").first.locator("a").inner_text(timeout=4000).strip()
+    except Exception:
+        pass
+
     # Clica no link do nome (primeira linha)
     try:
         page.locator("table tbody tr").first.locator("a").click(timeout=8000)
         page.wait_for_load_state("networkidle", timeout=20000)
     except Exception:
-        return {"status_raw": status_raw, "alerta": "", "impeditiva": None}
+        return {"status_raw": status_raw, "alerta": "", "impeditiva": None, "nome": nome_cliente}
 
     # Aguarda aba Alertas (já vem selecionada por padrão)
     try:
@@ -185,6 +192,7 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
         "status_raw": status_raw,
         "alerta":     alerta,
         "impeditiva": impeditiva_match,
+        "nome":       nome_cliente,
     }
 
 

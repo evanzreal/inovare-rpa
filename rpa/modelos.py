@@ -22,8 +22,8 @@ STATUS_ERRO = "erro"
 @dataclass
 class Cliente:
     """Cliente que chega pra analise. 'documento' = CPF ou CNPJ."""
-    nome: str
     documento: str
+    nome: str = ""
     telefone: str | None = None
     regiao: str | None = None
     origem: str = ""  # ex.: id do card no CRM

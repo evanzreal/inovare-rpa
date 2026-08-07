@@ -296,8 +296,8 @@ class LocalizaRequest(BaseModel):
 
 
 class PipelineRequest(BaseModel):
-    nome: str
     cpf: str
+    nome: str = ""                # opcional — se vazio, é buscado automaticamente no B2E
     aguardar_movida_s: int = 40  # tempo de espera antes de ler resultado Movida
 
 
@@ -336,12 +336,24 @@ async def credito_pipeline(req: PipelineRequest):
 
     async with _lock:
         loop = asyncio.get_event_loop()
+        import json as _json
 
-        # 1. Movida parte1 — envia lead (isso dispara o registro no B2E)
+        # 1. B2E — busca CPF e extrai nome do cliente automaticamente
+        b2e_res = await loop.run_in_executor(
+            _executor,
+            lambda: b2e_buscar(cpf=req.cpf, context=_context),
+        )
+
+        # Usa nome do B2E se não foi enviado na requisição
+        nome = req.nome or (b2e_res.bruto or {}).get("nome", "")
+        if not nome:
+            raise HTTPException(422, detail="Nome não encontrado no B2E e não foi enviado na requisição")
+
+        # 2. Movida parte1 — envia lead (isso dispara o registro no B2E)
         envio = await loop.run_in_executor(
             _executor,
             lambda: enviar_lead(
-                nome=req.nome,
+                nome=nome,
                 cpf=req.cpf,
                 telefone=movida_config.TELEFONE,
                 regiao=None,
@@ -355,16 +367,9 @@ async def credito_pipeline(req: PipelineRequest):
         # Extrai lead_id do JSON de resposta
         lead_id = None
         try:
-            import json as _json
             lead_id = str(_json.loads(envio.resposta).get("leadId", ""))
         except Exception:
             pass
-
-        # 2. B2E — lê resultado da submissão que o Movida acabou de criar
-        b2e_res = await loop.run_in_executor(
-            _executor,
-            lambda: b2e_buscar(cpf=req.cpf, context=_context),
-        )
 
         # 3. Movida parte2 — lê resultado do portal B2B (com retry interno)
         movida_res = await loop.run_in_executor(
@@ -372,7 +377,7 @@ async def credito_pipeline(req: PipelineRequest):
             lambda: ler_resultado(
                 documento=req.cpf,
                 context=_context,
-                nome=req.nome,
+                nome=nome,
                 aguardar_s=req.aguardar_movida_s,
                 lead_id=lead_id,
             ),
@@ -382,13 +387,13 @@ async def credito_pipeline(req: PipelineRequest):
         localiza_res = await loop.run_in_executor(
             _executor,
             lambda: _localiza.consultar(
-                Cliente(nome=req.nome, documento=req.cpf),
+                Cliente(documento=req.cpf, nome=nome),
                 _context,
             ),
         )
 
     return {
-        "cliente":          {"nome": req.nome, "cpf": req.cpf},
+        "cliente":          {"nome": nome, "cpf": req.cpf},
         "b2e":              asdict(b2e_res),
         "movida_envio":     asdict(envio),
         "movida_resultado": asdict(movida_res),
