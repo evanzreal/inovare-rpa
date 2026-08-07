@@ -13,7 +13,7 @@ import httpx
 from dotenv import load_dotenv
 
 from . import config
-from ....modelos import ResultadoCredito, STATUS_APROVADO, STATUS_REPROVADO, STATUS_ERRO
+from ....modelos import ResultadoCredito, STATUS_APROVADO, STATUS_REPROVADO, STATUS_PENDENTE, STATUS_ERRO
 from ....util import so_digitos
 from ....navegador import RAIZ
 
