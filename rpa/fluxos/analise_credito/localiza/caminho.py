@@ -80,39 +80,45 @@ def _clicar_criar(page) -> None:
 
 
 def _fill_cpf(page, cpf_fmt: str) -> None:
-    """Tenta preencher o campo CPF/CNPJ da Tela 1 com vários seletores de fallback."""
-    seletores = [
+    """
+    Preenche o campo CPF/CNPJ da Tela 1.
+    Aguarda o formulário aparecer antes de tentar qualquer seletor.
+    """
+    # 1. Espera algum label de CPF/CNPJ aparecer (indica que o form está pronto)
+    for texto_espera in ["CPF", "CNPJ", "CPF/CNPJ", "Documento"]:
+        try:
+            page.wait_for_selector(f"text={texto_espera}", timeout=3000)
+            break
+        except Exception:
+            continue
+
+    # 2. Tenta por label (mais confiável em Salesforce LWC)
+    for label in ["CPF/CNPJ", "CPF", "CNPJ", "Documento", "CPF / CNPJ"]:
+        try:
+            loc = page.get_by_label(label, exact=False).first
+            if loc.count() > 0 and loc.is_visible(timeout=2000):
+                loc.fill(cpf_fmt, timeout=6000)
+                print(f"   Localiza: CPF preenchido via label {label!r}")
+                return
+        except Exception:
+            continue
+
+    # 3. Tenta por placeholder
+    for sel in [
         "input[placeholder*='CPF']",
         "input[placeholder*='CNPJ']",
         "input[placeholder*='cpf' i]",
         "input[placeholder*='cnpj' i]",
         "input[placeholder*='Digite']",
-        "input[placeholder*='Documento']",
-        "input[placeholder*='documento' i]",
-    ]
-    for sel in seletores:
+    ]:
         try:
             loc = page.locator(sel).first
             if loc.count() > 0 and loc.is_visible(timeout=2000):
                 loc.fill(cpf_fmt, timeout=6000)
-                print(f"   Localiza: campo CPF preenchido via {sel!r}")
+                print(f"   Localiza: CPF preenchido via placeholder {sel!r}")
                 return
         except Exception:
             continue
-
-    # Último recurso: primeiro input de texto visível na página
-    try:
-        inputs = page.locator("input[type='text'], input:not([type='hidden']):not([type='submit']):not([type='button'])").all()
-        for inp in inputs[:8]:
-            try:
-                if inp.is_visible(timeout=1000):
-                    inp.fill(cpf_fmt, timeout=5000)
-                    print("   Localiza: campo CPF preenchido via input genérico")
-                    return
-            except Exception:
-                continue
-    except Exception:
-        pass
 
     raise Exception("Campo CPF/CNPJ não encontrado na Tela 1 do portal Localiza")
 
@@ -148,12 +154,14 @@ class Localiza:
             page.goto(PORTAL, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(3000)
 
-            # Clica em Criar
+            # Clica em Criar e aguarda o formulário LWC renderizar
             _clicar_criar(page)
-            page.wait_for_timeout(3000)  # LWC precisa renderizar o formulário
+            page.wait_for_load_state("networkidle", timeout=15000)
+            page.wait_for_timeout(2000)
 
-            # Tela 1: CPF (com fallbacks de seletor)
+            # Tela 1: CPF (com fallbacks de seletor; aguarda form aparecer internamente)
             _fill_cpf(page, cpf_fmt)
+            page.wait_for_timeout(500)
             page.get_by_role("button", name="Avançar").click(timeout=10000)
             page.wait_for_timeout(2500)
 
