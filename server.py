@@ -285,18 +285,18 @@ async def credito_b2e(req: ResultadoRequest):
         loop = asyncio.get_event_loop()
         resultado = await loop.run_in_executor(
             _executor,
-            lambda: b2e_buscar(cpf=req.cpf, context=_context),
+            lambda: b2e_buscar(cpf=req.documento, context=_context),
         )
     return asdict(resultado)
 
 
 class LocalizaRequest(BaseModel):
     nome: str
-    cpf: str
+    documento: str
 
 
 class PipelineRequest(BaseModel):
-    cpf: str
+    documento: str                # CPF ou CNPJ
     nome: str = ""                # opcional — se vazio, é buscado automaticamente no B2E
     aguardar_movida_s: int = 40  # tempo de espera antes de ler resultado Movida
 
@@ -311,7 +311,7 @@ async def credito_localiza(req: LocalizaRequest):
         resultado = await loop.run_in_executor(
             _executor,
             lambda: _localiza.consultar(
-                Cliente(nome=req.nome, documento=req.cpf),
+                Cliente(nome=req.nome, documento=req.documento),
                 _context,
             ),
         )
@@ -341,7 +341,7 @@ async def credito_pipeline(req: PipelineRequest):
         # 1. B2E — busca CPF e extrai nome do cliente automaticamente
         b2e_res = await loop.run_in_executor(
             _executor,
-            lambda: b2e_buscar(cpf=req.cpf, context=_context),
+            lambda: b2e_buscar(cpf=req.documento, context=_context),
         )
 
         # Usa nome do B2E se não foi enviado na requisição
@@ -354,7 +354,7 @@ async def credito_pipeline(req: PipelineRequest):
             _executor,
             lambda: enviar_lead(
                 nome=nome,
-                cpf=req.cpf,
+                cpf=req.documento,
                 telefone=movida_config.TELEFONE,
                 regiao=None,
                 cod_vendedor=movida_config.COD_VENDEDOR,
@@ -375,7 +375,7 @@ async def credito_pipeline(req: PipelineRequest):
         movida_res = await loop.run_in_executor(
             _executor,
             lambda: ler_resultado(
-                documento=req.cpf,
+                documento=req.documento,
                 context=_context,
                 nome=nome,
                 aguardar_s=req.aguardar_movida_s,
@@ -387,13 +387,13 @@ async def credito_pipeline(req: PipelineRequest):
         localiza_res = await loop.run_in_executor(
             _executor,
             lambda: _localiza.consultar(
-                Cliente(documento=req.cpf, nome=nome),
+                Cliente(documento=req.documento, nome=nome),
                 _context,
             ),
         )
 
     return {
-        "cliente":          {"nome": nome, "cpf": req.cpf},
+        "cliente":          {"nome": nome, "documento": req.documento},
         "b2e":              asdict(b2e_res),
         "movida_envio":     asdict(envio),
         "movida_resultado": asdict(movida_res),
@@ -449,7 +449,7 @@ async def credito_movida(req: CreditoRequest):
 
             credito_b2e_res = await loop.run_in_executor(
                 _executor,
-                lambda: b2e_buscar(cpf=req.cpf, context=_context),
+                lambda: b2e_buscar(cpf=req.documento, context=_context),
             )
 
             return {
