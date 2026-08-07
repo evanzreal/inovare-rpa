@@ -85,10 +85,10 @@ def _ocr_screenshot(img_path: str, nome: str | None = None) -> list[dict]:
 
     prompt = (
         "Esta imagem é uma tabela do portal B2B da Movida. "
-        "Extraia TODAS as linhas de dados (ignore cabeçalhos) e retorne um JSON array. "
+        "Extraia TODAS as linhas de dados visíveis (ignore cabeçalhos). "
         "Cada item deve ter: pedido_frota, data_criacao, status_reserva. "
-        f"{'Filtre apenas linhas que contenham o nome: ' + nome + '. ' if nome else ''}"
-        "Retorne APENAS o JSON, sem markdown, sem explicação. "
+        "IMPORTANTE: retorne TODAS as linhas, não filtre por nada. "
+        "Retorne APENAS o JSON array, sem markdown, sem explicação. "
         "Exemplo: [{\"pedido_frota\":\"123\",\"data_criacao\":\"03/08/2026 08:41\",\"status_reserva\":\"Reprovada\"}]"
     )
 
@@ -177,19 +177,37 @@ def ler_resultado(
             print(f"   filtro por nome '{nome}': {'ok' if filtrou else 'falhou'}")
             page.wait_for_timeout(1500)
 
-        # Screenshot APÓS o filtro
         SAIDAS.mkdir(parents=True, exist_ok=True)
         shot = SAIDAS / f"portal_{so_digitos(documento)}.png"
-        page.screenshot(path=str(shot), full_page=True)
-        res.print_path = str(shot)
-        print(f"   screenshot salvo: {shot}")
 
-        # OCR via Gemini
-        linhas = _ocr_screenshot(str(shot), nome=nome)
+        # Retry: até 3 tentativas com 25s de espera entre cada
+        linhas = []
+        for tentativa in range(3):
+            if tentativa > 0:
+                print(f"   retry {tentativa}/2 — aguardando 25s...")
+                time.sleep(25)
+                page.reload(wait_until="networkidle", timeout=60000)
+                _aceitar_cookies(page)
+                page.wait_for_timeout(2000)
+                if nome:
+                    _filtrar_por_nome(page, nome)
+                    page.wait_for_timeout(1800)
+
+            # Scroll para garantir que Angular renderizou a tabela
+            page.evaluate("() => window.scrollTo(0, 600)")
+            page.wait_for_timeout(1500)
+
+            page.screenshot(path=str(shot), full_page=True)
+            res.print_path = str(shot)
+            print(f"   screenshot salvo (tentativa {tentativa+1}): {shot}")
+
+            linhas = _ocr_screenshot(str(shot), nome=nome)
+            if linhas:
+                break
 
         if not linhas:
             res.status = STATUS_ERRO
-            res.detalhe = "OCR nao retornou linhas da tabela."
+            res.detalhe = "OCR nao retornou linhas da tabela (3 tentativas)."
             return res
 
         # Escolhe a linha correta: por lead_id se disponível, senão a mais recente (primeira)

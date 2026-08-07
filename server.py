@@ -254,6 +254,12 @@ class LocalizaRequest(BaseModel):
     cpf: str
 
 
+class PipelineRequest(BaseModel):
+    nome: str
+    cpf: str
+    aguardar_movida_s: int = 40  # tempo de espera antes de ler resultado Movida
+
+
 @app.post("/credito/localiza")
 async def credito_localiza(req: LocalizaRequest):
     """Cria lead no Localiza Meoo Revendas e lê o resultado da pré-análise."""
@@ -269,6 +275,84 @@ async def credito_localiza(req: LocalizaRequest):
             ),
         )
     return asdict(resultado)
+
+
+@app.post("/credito/pipeline")
+async def credito_pipeline(req: PipelineRequest):
+    """
+    Pipeline completo de análise de crédito.
+
+    Sequência:
+    1. B2E antifraude  (~5s)
+    2. Movida parte 1  — cria lead (~10s)
+    3. Movida parte 2  — lê portal B2B (~40s + OCR)
+    4. Localiza        — cria lead + pré-análise (~25s)
+
+    Retorna: {cliente, b2e, movida_envio, movida_resultado, localiza}
+    """
+    if not _context:
+        raise HTTPException(503, detail="Browser nao inicializado")
+
+    async with _lock:
+        loop = asyncio.get_event_loop()
+
+        # 1. B2E
+        b2e_res = await loop.run_in_executor(
+            _executor,
+            lambda: b2e_buscar(cpf=req.cpf, context=_context),
+        )
+
+        # 2. Movida parte1 — envia lead
+        envio = await loop.run_in_executor(
+            _executor,
+            lambda: enviar_lead(
+                nome=req.nome,
+                cpf=req.cpf,
+                telefone=movida_config.TELEFONE,
+                regiao=None,
+                cod_vendedor=movida_config.COD_VENDEDOR,
+                enviar=True,
+                context=_context,
+                salvar_print=True,
+            ),
+        )
+
+        # Extrai lead_id do JSON de resposta
+        lead_id = None
+        try:
+            import json as _json
+            lead_id = str(_json.loads(envio.resposta).get("leadId", ""))
+        except Exception:
+            pass
+
+        # 3. Movida parte2 — lê resultado do portal (com retry interno)
+        movida_res = await loop.run_in_executor(
+            _executor,
+            lambda: ler_resultado(
+                documento=req.cpf,
+                context=_context,
+                nome=req.nome,
+                aguardar_s=req.aguardar_movida_s,
+                lead_id=lead_id,
+            ),
+        )
+
+        # 4. Localiza
+        localiza_res = await loop.run_in_executor(
+            _executor,
+            lambda: _localiza.consultar(
+                Cliente(nome=req.nome, documento=req.cpf),
+                _context,
+            ),
+        )
+
+    return {
+        "cliente":          {"nome": req.nome, "cpf": req.cpf},
+        "b2e":              asdict(b2e_res),
+        "movida_envio":     asdict(envio),
+        "movida_resultado": asdict(movida_res),
+        "localiza":         asdict(localiza_res),
+    }
 
 
 @app.post("/credito/movida")
