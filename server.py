@@ -252,6 +252,30 @@ async def debug_tabs():
     return {"tabs": tabs}
 
 
+@app.get("/debug/ver")
+async def debug_ver(aba: int = 0):
+    """
+    Tira screenshot da aba indicada (padrão: primeira) e retorna como imagem PNG.
+    Use para compartilhar o estado atual do browser.
+    """
+    if not _context:
+        raise HTTPException(503, detail="Browser nao inicializado")
+    import base64
+    from fastapi.responses import Response
+    def _shot():
+        pages = _context.pages
+        if not pages:
+            raise Exception("Nenhuma aba aberta")
+        page = pages[min(aba, len(pages) - 1)]
+        path = f"/tmp/ver_aba{aba}.png"
+        page.screenshot(path=path, full_page=False)
+        with open(path, "rb") as f:
+            return f.read()
+    loop = asyncio.get_event_loop()
+    img = await loop.run_in_executor(_executor, _shot)
+    return Response(content=img, media_type="image/png")
+
+
 @app.post("/credito/b2e")
 async def credito_b2e(req: ResultadoRequest):
     """Busca CPF no portal antifraude B2E e retorna o status mais recente."""
