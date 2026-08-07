@@ -18,11 +18,15 @@ echo ""
 echo "=== Inovare RPA — Atualização ==="
 echo ""
 
-echo "[1/2] Puxando atualizações do GitHub..."
+echo "[1/3] Puxando atualizações do GitHub..."
 git pull
 
 echo ""
-echo "[2/2] Reiniciando servidor..."
+echo "[2/3] Instalando dependências novas..."
+.venv/bin/pip install -r requirements.txt -q
+
+echo ""
+echo "[3/3] Reiniciando servidor..."
 launchctl kickstart -k "gui/$(id -u)/inovare.rpa"
 
 echo ""
