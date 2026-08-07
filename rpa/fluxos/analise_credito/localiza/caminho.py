@@ -81,19 +81,15 @@ def _clicar_criar(page) -> None:
 
 def _fill_cpf(page, cpf_fmt: str) -> None:
     """
-    Preenche o campo CPF/CNPJ da Tela 1.
-    Aguarda o formulário aparecer antes de tentar qualquer seletor.
+    Preenche o campo 'Digite o CPF/CNPJ' que já fica visível na página inicial.
+    O formulário 'Cadastro de Lead' está sempre presente — sem necessidade de clicar Criar.
     """
-    # 1. Espera algum label de CPF/CNPJ aparecer (indica que o form está pronto)
-    for texto_espera in ["CPF", "CNPJ", "CPF/CNPJ", "Documento"]:
-        try:
-            page.wait_for_selector(f"text={texto_espera}", timeout=3000)
-            break
-        except Exception:
-            continue
+    # Aguarda o form aparecer
+    page.wait_for_selector("text=Cadastro de Lead", timeout=15000)
+    page.wait_for_timeout(1000)
 
-    # 2. Tenta por label (mais confiável em Salesforce LWC)
-    for label in ["CPF/CNPJ", "CPF", "CNPJ", "Documento", "CPF / CNPJ"]:
+    # Tenta pelo label exato que aparece na tela
+    for label in ["Digite o CPF/CNPJ", "CPF/CNPJ", "CPF", "CNPJ"]:
         try:
             loc = page.get_by_label(label, exact=False).first
             if loc.count() > 0 and loc.is_visible(timeout=2000):
@@ -103,7 +99,7 @@ def _fill_cpf(page, cpf_fmt: str) -> None:
         except Exception:
             continue
 
-    # 3. Tenta por placeholder
+    # Tenta pelo input dentro do form Cadastro de Lead
     for sel in [
         "input[placeholder*='CPF']",
         "input[placeholder*='CNPJ']",
@@ -120,7 +116,7 @@ def _fill_cpf(page, cpf_fmt: str) -> None:
         except Exception:
             continue
 
-    raise Exception("Campo CPF/CNPJ não encontrado na Tela 1 do portal Localiza")
+    raise Exception("Campo CPF/CNPJ não encontrado no formulário 'Cadastro de Lead'")
 
 
 def _extrair(texto: str, campo: str) -> str:
@@ -154,12 +150,8 @@ class Localiza:
             page.goto(PORTAL, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(3000)
 
-            # Clica em Criar e aguarda o formulário LWC renderizar
-            _clicar_criar(page)
-            page.wait_for_load_state("networkidle", timeout=15000)
-            page.wait_for_timeout(2000)
-
-            # Tela 1: CPF (com fallbacks de seletor; aguarda form aparecer internamente)
+            # O form "Cadastro de Lead" já está na página — não clicar em Criar
+            # Tela 1: CPF
             _fill_cpf(page, cpf_fmt)
             page.wait_for_timeout(500)
             page.get_by_role("button", name="Avançar").click(timeout=10000)
