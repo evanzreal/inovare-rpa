@@ -313,13 +313,7 @@ async def credito_pipeline(req: PipelineRequest):
     async with _lock:
         loop = asyncio.get_event_loop()
 
-        # 1. B2E
-        b2e_res = await loop.run_in_executor(
-            _executor,
-            lambda: b2e_buscar(cpf=req.cpf, context=_context),
-        )
-
-        # 2. Movida parte1 — envia lead
+        # 1. Movida parte1 — envia lead (isso dispara o registro no B2E)
         envio = await loop.run_in_executor(
             _executor,
             lambda: enviar_lead(
@@ -342,7 +336,13 @@ async def credito_pipeline(req: PipelineRequest):
         except Exception:
             pass
 
-        # 3. Movida parte2 — lê resultado do portal (com retry interno)
+        # 2. B2E — lê resultado da submissão que o Movida acabou de criar
+        b2e_res = await loop.run_in_executor(
+            _executor,
+            lambda: b2e_buscar(cpf=req.cpf, context=_context),
+        )
+
+        # 3. Movida parte2 — lê resultado do portal B2B (com retry interno)
         movida_res = await loop.run_in_executor(
             _executor,
             lambda: ler_resultado(
