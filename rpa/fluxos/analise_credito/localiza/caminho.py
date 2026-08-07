@@ -158,7 +158,8 @@ class Localiza:
             page.wait_for_timeout(2500)
 
             # Tela 2: dados do lead
-            _fill(page, "Nome",              cliente.nome)
+            if not _fill(page, "Nome / Razão Social", cliente.nome):
+                _fill(page, "Nome", cliente.nome)
             _fill(page, "Celular",           _CELULAR)
             _fill(page, "Email do prospect", _EMAIL_PROSPECT)
             _fill(page, "Telefone",          _TELEFONE)
