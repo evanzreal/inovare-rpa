@@ -56,6 +56,22 @@ def _fechar_browser():
         _playwright.stop()
 
 
+def _abrir_portais():
+    """Navega para a Localiza na aba inicial para o usuário fazer login."""
+    if not _context:
+        return
+    try:
+        page = _context.pages[0]
+        page.goto(
+            "https://localiza.my.site.com/meoorevendas/s/",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+        print(">> Browser na Localiza — faça login para começar.")
+    except Exception as e:
+        print(f">> Aviso: navegação inicial para Localiza falhou: {e}")
+
+
 async def _keepalive_localiza():
     """Clica na aba Localiza a cada 60s para manter a sessão ativa."""
     while True:
@@ -79,6 +95,7 @@ async def _keepalive_localiza():
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(_executor, _abrir_browser)
+    await loop.run_in_executor(_executor, _abrir_portais)
     asyncio.create_task(_keepalive_localiza())
     yield
     await loop.run_in_executor(_executor, _fechar_browser)
