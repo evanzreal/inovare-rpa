@@ -63,6 +63,60 @@ def _fill(page, label: str, valor: str) -> bool:
         return False
 
 
+def _clicar_criar(page) -> None:
+    tentativas = [
+        lambda: page.get_by_role("button", name="Criar").click(timeout=8000),
+        lambda: page.locator("button:has-text('Criar')").first.click(timeout=5000),
+        lambda: page.get_by_text("Criar", exact=True).first.click(timeout=5000),
+        lambda: page.locator("a:has-text('Criar')").first.click(timeout=5000),
+    ]
+    for fn in tentativas:
+        try:
+            fn()
+            return
+        except Exception:
+            continue
+    raise Exception("Botão 'Criar' não encontrado no portal Localiza")
+
+
+def _fill_cpf(page, cpf_fmt: str) -> None:
+    """Tenta preencher o campo CPF/CNPJ da Tela 1 com vários seletores de fallback."""
+    seletores = [
+        "input[placeholder*='CPF']",
+        "input[placeholder*='CNPJ']",
+        "input[placeholder*='cpf' i]",
+        "input[placeholder*='cnpj' i]",
+        "input[placeholder*='Digite']",
+        "input[placeholder*='Documento']",
+        "input[placeholder*='documento' i]",
+    ]
+    for sel in seletores:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible(timeout=2000):
+                loc.fill(cpf_fmt, timeout=6000)
+                print(f"   Localiza: campo CPF preenchido via {sel!r}")
+                return
+        except Exception:
+            continue
+
+    # Último recurso: primeiro input de texto visível na página
+    try:
+        inputs = page.locator("input[type='text'], input:not([type='hidden']):not([type='submit']):not([type='button'])").all()
+        for inp in inputs[:8]:
+            try:
+                if inp.is_visible(timeout=1000):
+                    inp.fill(cpf_fmt, timeout=5000)
+                    print("   Localiza: campo CPF preenchido via input genérico")
+                    return
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    raise Exception("Campo CPF/CNPJ não encontrado na Tela 1 do portal Localiza")
+
+
 def _extrair(texto: str, campo: str) -> str:
     m = re.search(rf'{re.escape(campo)}\s+([^\n]+)', texto)
     return m.group(1).strip() if m else ""
@@ -95,11 +149,11 @@ class Localiza:
             page.wait_for_timeout(3000)
 
             # Clica em Criar
-            page.get_by_role("button", name="Criar").click(timeout=10000)
-            page.wait_for_timeout(2000)
+            _clicar_criar(page)
+            page.wait_for_timeout(3000)  # LWC precisa renderizar o formulário
 
-            # Tela 1: CPF
-            page.locator("input[placeholder*='CPF']").first.fill(cpf_fmt, timeout=10000)
+            # Tela 1: CPF (com fallbacks de seletor)
+            _fill_cpf(page, cpf_fmt)
             page.get_by_role("button", name="Avançar").click(timeout=10000)
             page.wait_for_timeout(2500)
 

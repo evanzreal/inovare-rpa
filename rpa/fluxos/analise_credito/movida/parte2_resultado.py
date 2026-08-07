@@ -23,8 +23,14 @@ SAIDAS = RAIZ / "saidas" / "credito" / "movida"
 PORTAL_URL = "https://portalb2b.movida.com.br/relatorios/pedidos"
 _OCR_MODEL = "google/gemini-2.5-flash"
 _MAPA_STATUS = {
-    "aprovada": STATUS_APROVADO,
-    "reprovada": STATUS_REPROVADO,
+    "aprovada":     STATUS_APROVADO,
+    "aprovado":     STATUS_APROVADO,
+    "reprovada":    STATUS_REPROVADO,
+    "reprovado":    STATUS_REPROVADO,
+    "em andamento": STATUS_PENDENTE,
+    "em análise":   STATUS_PENDENTE,
+    "em analise":   STATUS_PENDENTE,
+    "pendente":     STATUS_PENDENTE,
 }
 
 
