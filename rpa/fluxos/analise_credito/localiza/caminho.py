@@ -68,6 +68,19 @@ def _extrair(texto: str, campo: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+def _ler_resultado(page) -> str:
+    """
+    Lê o resultado de pré-aprovação da página aberta.
+    Suporta Lead ('Resultado Pré-análise') e Conta ('Cliente pré-aprovado?').
+    """
+    texto = page.evaluate("() => document.body.innerText") or ""
+    return (
+        _extrair(texto, "Resultado Pré-análise")       # Lead (CPF)
+        or _extrair(texto, "Cliente pré-aprovado?")    # Conta (CNPJ)
+        or _extrair(texto, "Cliente pré-aprovado")     # variação sem '?'
+    )
+
+
 class Localiza:
     nome = "localiza"
     automatico = True
@@ -101,37 +114,32 @@ class Localiza:
             page.wait_for_timeout(500)
             page.get_by_role("button", name="Avançar").click(timeout=10000)
 
-            # Aguarda banner de sucesso
-            page.wait_for_selector("text=Lead criado com sucesso", timeout=30000)
+            # Aguarda banner de sucesso (Lead ou Conta criado)
+            page.wait_for_selector("text=criado com sucesso", timeout=30000)
 
-            # Navega para o lead
+            # Navega para o registro
             page.get_by_text("Ir para o lead", exact=False).click(timeout=10000)
             page.wait_for_url(
-                lambda u: "/lead/" in u.lower(),
+                lambda u: "/lead/" in u.lower() or "/conta/" in u.lower()
+                          or "/account/" in u.lower(),
                 timeout=30000,
             )
-            page.wait_for_timeout(3000)
 
-            # Polling: aguarda pré-análise concluir (Salesforce leva ~10-20s)
-            resultado_raw = ""
-            status_pre    = ""
-            for _ in range(12):
-                texto = page.evaluate("() => document.body.innerText") or ""
-                resultado_raw = _extrair(texto, "Resultado Pré-análise")
-                status_pre    = _extrair(texto, "Status da Pré-análise de Crédito")
-                if "conclu" in status_pre.lower():
-                    break
-                page.wait_for_timeout(5000)
-                try:
-                    page.reload(wait_until="networkidle", timeout=30000)
-                except Exception:
-                    pass
+            # Aguarda Salesforce processar a pré-análise (~10s)
+            page.wait_for_timeout(10000)
+
+            resultado_raw = _ler_resultado(page)
+
+            # Se ainda vazio (análise ainda processando), tenta mais uma vez
+            if not resultado_raw:
+                page.wait_for_timeout(10000)
+                resultado_raw = _ler_resultado(page)
 
             return ResultadoCredito(
-                status=_mapear(resultado_raw or status_pre),
+                status=_mapear(resultado_raw),
                 locadora="localiza",
                 documento=cpf_dig,
-                detalhe=f"{resultado_raw} | pré-análise: {status_pre}",
+                detalhe=resultado_raw or "resultado não encontrado",
             )
 
         except Exception as exc:
