@@ -56,8 +56,14 @@ def _mapear(texto: str) -> str:
 
 
 def _fill(page, label: str, valor: str) -> bool:
+    """Preenche campo pelo label. Clica primeiro e dispara events para Salesforce LWC."""
     try:
-        page.get_by_label(label, exact=False).first.fill(valor, timeout=4000)
+        loc = page.get_by_label(label, exact=False).first
+        loc.click(timeout=4000)
+        loc.fill("", timeout=3000)       # limpa antes
+        loc.press_sequentially(valor, delay=30)
+        loc.dispatch_event("change")
+        loc.dispatch_event("blur")
         return True
     except Exception:
         return False
@@ -155,7 +161,10 @@ class Localiza:
             _fill_cpf(page, cpf_fmt)
             page.wait_for_timeout(500)
             page.get_by_role("button", name="Avançar").click(timeout=10000)
-            page.wait_for_timeout(2500)
+
+            # Aguarda Tela 2 renderizar (LWC precisa de tempo)
+            page.wait_for_selector("text=Nome / Razão Social", timeout=15000)
+            page.wait_for_timeout(1500)
 
             # Tela 2: dados do lead
             if not _fill(page, "Nome / Razão Social", cliente.nome):
@@ -165,6 +174,7 @@ class Localiza:
             _fill(page, "Telefone",          _TELEFONE)
             _fill(page, "Email da revenda",  _EMAIL_REVENDA)
             _fill(page, "Descrição",         _DESCRICAO)
+            page.wait_for_timeout(500)
 
             page.wait_for_timeout(500)
             page.get_by_role("button", name="Avançar").click(timeout=10000)
