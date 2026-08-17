@@ -182,7 +182,7 @@ async def debug_navegar(url: str):
     if not _context:
         raise HTTPException(503, detail="Browser nao inicializado")
     def _nav():
-        page = _context.pages[0]
+        page = _context.pages[0] if _context.pages else _context.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(2000)
         return {"url": page.url, "titulo": page.title()}
