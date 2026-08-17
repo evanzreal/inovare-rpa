@@ -297,7 +297,7 @@ class LocalizaRequest(BaseModel):
 
 class PipelineRequest(BaseModel):
     documento: str                # CPF ou CNPJ
-    nome: str = ""                # opcional — se vazio, é buscado automaticamente no B2E
+    nome: str                     # nome completo do cliente (necessário para Movida)
     aguardar_movida_s: int = 40  # tempo de espera antes de ler resultado Movida
 
 
@@ -338,18 +338,9 @@ async def credito_pipeline(req: PipelineRequest):
         loop = asyncio.get_event_loop()
         import json as _json
 
-        # 1. B2E — busca CPF e extrai nome do cliente automaticamente
-        b2e_res = await loop.run_in_executor(
-            _executor,
-            lambda: b2e_buscar(cpf=req.documento, context=_context),
-        )
+        nome = req.nome
 
-        # Usa nome do B2E se não foi enviado na requisição
-        nome = req.nome or (b2e_res.bruto or {}).get("nome", "")
-        if not nome:
-            raise HTTPException(422, detail="Nome não encontrado no B2E e não foi enviado na requisição")
-
-        # 2. Movida parte1 — envia lead (isso dispara o registro no B2E)
+        # 1. Movida parte1 — envia lead (cria o registro na Movida e dispara análise B2E)
         envio = await loop.run_in_executor(
             _executor,
             lambda: enviar_lead(
@@ -370,6 +361,12 @@ async def credito_pipeline(req: PipelineRequest):
             lead_id = str(_json.loads(envio.resposta).get("leadId", ""))
         except Exception:
             pass
+
+        # 2. B2E — lê resultado antifraude gerado pela Movida
+        b2e_res = await loop.run_in_executor(
+            _executor,
+            lambda: b2e_buscar(cpf=req.documento, context=_context),
+        )
 
         # 3. Movida parte2 — lê resultado do portal B2B (com retry interno)
         movida_res = await loop.run_in_executor(
