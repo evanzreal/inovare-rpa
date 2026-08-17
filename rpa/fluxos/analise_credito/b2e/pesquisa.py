@@ -137,63 +137,89 @@ def _ler_tabela(page) -> list:
 # Detalhe do pedido: aba Alertas → Impeditiva
 # ──────────────────────────────────────────────
 
+def _extrair_campo(label: str, texto: str) -> str:
+    m = re.search(rf"\b{re.escape(label)}\b\s+([^\n]+)", texto)
+    return m.group(1).strip() if m else ""
+
+
 def _ler_detalhe(page, cpf_limpo: str) -> dict:
     """
-    Clica no primeiro resultado da lista e lê a aba Alertas.
-    Retorna {"status_raw": "...", "alerta": "...", "impeditiva": {...}|None}.
+    Clica no primeiro resultado e extrai dados de todas as abas:
+    Alertas, Bureaux, Movimentação + painel esquerdo.
     """
-    # Aguarda tabela
     try:
         page.wait_for_selector("table tbody tr", timeout=8000)
     except Exception:
         return {"status_raw": "", "alerta": "", "impeditiva": None}
 
-    # Lê status da primeira linha ANTES de navegar (para manter o status original)
     linhas = _ler_tabela(page)
     status_raw = ""
     if linhas:
         cols = linhas[0]
         status_raw = cols[5] if len(cols) > 5 else cols[-1]
 
-    # Captura o nome do cliente do link antes de clicar
     nome_cliente = ""
     try:
         nome_cliente = page.locator("table tbody tr").first.locator("a").inner_text(timeout=4000).strip()
     except Exception:
         pass
 
-    # Clica no link do nome (primeira linha)
     try:
         page.locator("table tbody tr").first.locator("a").click(timeout=8000)
         page.wait_for_load_state("networkidle", timeout=20000)
     except Exception:
         return {"status_raw": status_raw, "alerta": "", "impeditiva": None, "nome": nome_cliente}
 
-    # Aguarda aba Alertas (já vem selecionada por padrão)
+    resultado = {
+        "status_raw":  status_raw,
+        "nome":        nome_cliente,
+        "alerta":      "",
+        "impeditiva":  None,
+        "painel":      {},
+        "bureaux":     {},
+        "movimentacao": [],
+    }
+
+    # ── Painel esquerdo (Detalhes do Cliente + Pedido + Variáveis) ──
+    try:
+        texto_esq = page.evaluate("""() => {
+            const esq = document.querySelector('[class*="col-md-4"], [class*="col-sm-4"]');
+            return esq ? esq.innerText : '';
+        }""") or ""
+        linhas_p = [l.strip() for l in texto_esq.split('\n') if l.strip()]
+        SKIP_P = {"Detalhes do Cliente", "Detalhes do pedido", "Powered by B2E Group",
+                  "Pesquisa", "Grupo", "Descrição", "Valor"}
+        painel = {}
+        i = 0
+        while i < len(linhas_p) - 1:
+            chave = linhas_p[i]
+            valor = linhas_p[i + 1]
+            if (chave not in SKIP_P and not chave.startswith("R-")
+                    and len(chave) < 55 and not re.match(r"^\d", chave)):
+                painel[chave] = valor
+                i += 2
+            else:
+                i += 1
+        resultado["painel"] = painel
+    except Exception:
+        pass
+
+    # ── Aba Alertas ──
     try:
         page.wait_for_selector("text=Impeditiva", timeout=8000)
-    except Exception:
-        pass
-
-    # Lê texto da seção Impeditiva (aba Alertas)
-    alerta = ""
-    try:
-        texto_pagina = page.evaluate("() => document.body.innerText") or ""
-        m = re.search(r"Impeditiva\s+(.+?)(?=\n[A-ZÁÉÍÓÚÂÊÎÔÛÃÕ][a-záéíóúâêîôûãõ]|\Z)",
-                      texto_pagina, re.DOTALL)
+        texto_pg = page.evaluate("() => document.body.innerText") or ""
+        m = re.search(r"Impeditiva\s+(.+?)(?=\nVoltar|\Z)", texto_pg, re.DOTALL)
         if m:
-            alerta = m.group(1).strip()
+            resultado["alerta"] = m.group(1).strip().split("\n")[0]
     except Exception:
         pass
+    resultado["impeditiva"] = _match_impeditiva(resultado["alerta"])
 
-    impeditiva_match = _match_impeditiva(alerta)
-
-    # Aba Bureaux → nome real do cliente
+    # ── Aba Bureaux → CPF V2 - Assertiva ──
     nome_real = nome_cliente
     try:
         page.locator("text=Bureaux").first.click(timeout=5000)
         page.wait_for_timeout(1500)
-        # Sub-botão CPF V2 - Assertiva (pode já estar ativo)
         for btn in ["Cpf V2 - Assertiva", "CPF V2 - Assertiva", "CPF V2"]:
             try:
                 page.locator(f"text={btn}").first.click(timeout=3000)
@@ -201,36 +227,44 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
                 break
             except Exception:
                 continue
-        # Nome real: panel-heading contém "NOME COMPLETO CPF"
-        try:
-            headings = page.evaluate(
-                "() => [...document.querySelectorAll('.panel-heading')].map(e => e.innerText.trim())"
-            )
-            for h in headings:
-                sem_cpf = h.replace(cpf_limpo, "").strip()
-                if sem_cpf and re.match(r"^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕ\s]{4,}$", sem_cpf):
-                    nome_real = sem_cpf
-                    break
-        except Exception:
-            pass
-        # Fallback: regex no texto da aba Bureaux
-        if nome_real == nome_cliente:
-            texto_bureaux = page.evaluate("() => document.body.innerText") or ""
-            # Busca "Nome" seguido de nome em maiúsculas (ignora "Cliente Cliente")
-            for m in re.finditer(r"\bNome\b\s+([A-ZÁÉÍÓÚÂÊÎÔÛÃÕ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕ\s]{4,})", texto_bureaux):
-                candidato = m.group(1).strip().split("\n")[0].strip()
-                if candidato.upper() == candidato and len(candidato) > 8:
-                    nome_real = candidato
-                    break
+
+        texto_b = page.evaluate("() => document.body.innerText") or ""
+
+        bureaux = {}
+        for campo in ["Nome", "Nome Da Mae", "Sexo", "Data De Nascimento",
+                      "Status Do CPF", "Renda", "Faixa", "Idade", "Descrição CBO", "Setor CBO"]:
+            v = _extrair_campo(campo, texto_b)
+            if v:
+                bureaux[campo] = v
+
+        emails = re.findall(r"E-Mail\s+(\S+@\S+)", texto_b)
+        if emails:
+            bureaux["emails"] = list(dict.fromkeys(emails))  # dedup mantendo ordem
+
+        # Nome real em maiúsculas (ignora "Cliente Cliente")
+        nome_bureaux = bureaux.get("Nome", "")
+        if nome_bureaux and nome_bureaux.upper() == nome_bureaux and len(nome_bureaux) > 8:
+            nome_real = nome_bureaux
+
+        resultado["bureaux"] = bureaux
+        resultado["nome"] = nome_real
     except Exception:
         pass
 
-    return {
-        "status_raw": status_raw,
-        "alerta":     alerta,
-        "impeditiva": impeditiva_match,
-        "nome":       nome_real,
-    }
+    # ── Aba Movimentação ──
+    try:
+        page.locator("text=Movimentação").first.click(timeout=5000)
+        page.wait_for_timeout(1500)
+        rows = page.evaluate("""() => {
+            return [...document.querySelectorAll('table tbody tr')]
+                .map(tr => [...tr.querySelectorAll('td')].map(td => td.innerText.trim()))
+                .filter(r => r.length >= 2 && r[0]);
+        }""")
+        resultado["movimentacao"] = rows
+    except Exception:
+        pass
+
+    return resultado
 
 
 # ──────────────────────────────────────────────
@@ -292,10 +326,13 @@ def buscar(cpf: str, context) -> ResultadoCredito:
         cols  = linhas[0]
         data  = cols[0] if len(cols) > 0 else ""
         tipo  = cols[1] if len(cols) > 1 else ""
+        nome_real = detalhe_info.get("nome", "")
 
         detalhe_str = f"{status_raw} | {data} | {tipo}"
         if alerta:
             detalhe_str += f" | alerta: {alerta[:120]}"
+        if nome_real:
+            detalhe_str += f" | nome: {nome_real}"
 
         return ResultadoCredito(
             status=_mapear_status(status_raw),
@@ -303,11 +340,15 @@ def buscar(cpf: str, context) -> ResultadoCredito:
             documento=cpf_limpo,
             detalhe=detalhe_str,
             bruto={
-                "status_raw": status_raw,
-                "data":       data,
-                "tipo":       tipo,
-                "alerta":     alerta,
-                "impeditiva": imp,
+                "status_raw":   status_raw,
+                "data":         data,
+                "tipo":         tipo,
+                "alerta":       alerta,
+                "impeditiva":   imp,
+                "nome_real":    nome_real,
+                "painel":       detalhe_info.get("painel", {}),
+                "bureaux":      detalhe_info.get("bureaux", {}),
+                "movimentacao": detalhe_info.get("movimentacao", []),
             },
         )
 
