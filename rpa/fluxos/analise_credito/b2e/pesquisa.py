@@ -175,7 +175,7 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
     except Exception:
         pass
 
-    # Lê texto da seção Impeditiva
+    # Lê texto da seção Impeditiva (aba Alertas)
     alerta = ""
     try:
         texto_pagina = page.evaluate("() => document.body.innerText") or ""
@@ -188,11 +188,32 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
 
     impeditiva_match = _match_impeditiva(alerta)
 
+    # Aba Bureaux → CPF V2 Assertiva → nome real do cliente
+    nome_real = nome_cliente
+    try:
+        page.get_by_role("tab", name="Bureaux").click(timeout=5000)
+        page.wait_for_timeout(1500)
+        # Clica em "CPF V2" ou "Assertiva" se houver botão
+        for btn in ["Cpf V2 - Assertiva", "CPF V2 - Assertiva", "CPF V2", "Assertiva"]:
+            try:
+                page.get_by_role("button", name=btn, exact=False).first.click(timeout=3000)
+                page.wait_for_timeout(1000)
+                break
+            except Exception:
+                continue
+        # Extrai o campo "Nome" do bureaux
+        texto_bureaux = page.evaluate("() => document.body.innerText") or ""
+        m = re.search(r"\bNome\b\s+([A-ZÁÉÍÓÚÂÊÎÔÛÃÕ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕ\s]+)", texto_bureaux)
+        if m:
+            nome_real = m.group(1).strip()
+    except Exception:
+        pass
+
     return {
         "status_raw": status_raw,
         "alerta":     alerta,
         "impeditiva": impeditiva_match,
-        "nome":       nome_cliente,
+        "nome":       nome_real,
     }
 
 
