@@ -297,7 +297,7 @@ class LocalizaRequest(BaseModel):
 
 class PipelineRequest(BaseModel):
     documento: str                # CPF ou CNPJ
-    nome: str                     # nome completo do cliente (necessário para Movida)
+    nome: str = "Cliente"         # nome para a Movida (qualquer valor serve)
     aguardar_movida_s: int = 40  # tempo de espera antes de ler resultado Movida
 
 
