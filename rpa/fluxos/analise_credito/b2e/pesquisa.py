@@ -188,24 +188,40 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
 
     impeditiva_match = _match_impeditiva(alerta)
 
-    # Aba Bureaux → CPF V2 Assertiva → nome real do cliente
+    # Aba Bureaux → nome real do cliente
     nome_real = nome_cliente
     try:
-        page.get_by_role("tab", name="Bureaux").click(timeout=5000)
+        page.locator("text=Bureaux").first.click(timeout=5000)
         page.wait_for_timeout(1500)
-        # Clica em "CPF V2" ou "Assertiva" se houver botão
-        for btn in ["Cpf V2 - Assertiva", "CPF V2 - Assertiva", "CPF V2", "Assertiva"]:
+        # Sub-botão CPF V2 - Assertiva (pode já estar ativo)
+        for btn in ["Cpf V2 - Assertiva", "CPF V2 - Assertiva", "CPF V2"]:
             try:
-                page.get_by_role("button", name=btn, exact=False).first.click(timeout=3000)
-                page.wait_for_timeout(1000)
+                page.locator(f"text={btn}").first.click(timeout=3000)
+                page.wait_for_timeout(800)
                 break
             except Exception:
                 continue
-        # Extrai o campo "Nome" do bureaux
-        texto_bureaux = page.evaluate("() => document.body.innerText") or ""
-        m = re.search(r"\bNome\b\s+([A-ZÁÉÍÓÚÂÊÎÔÛÃÕ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕ\s]+)", texto_bureaux)
-        if m:
-            nome_real = m.group(1).strip()
+        # Nome real: panel-heading contém "NOME COMPLETO CPF"
+        try:
+            headings = page.evaluate(
+                "() => [...document.querySelectorAll('.panel-heading')].map(e => e.innerText.trim())"
+            )
+            for h in headings:
+                sem_cpf = h.replace(cpf_limpo, "").strip()
+                if sem_cpf and re.match(r"^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕ\s]{4,}$", sem_cpf):
+                    nome_real = sem_cpf
+                    break
+        except Exception:
+            pass
+        # Fallback: regex no texto da aba Bureaux
+        if nome_real == nome_cliente:
+            texto_bureaux = page.evaluate("() => document.body.innerText") or ""
+            # Busca "Nome" seguido de nome em maiúsculas (ignora "Cliente Cliente")
+            for m in re.finditer(r"\bNome\b\s+([A-ZÁÉÍÓÚÂÊÎÔÛÃÕ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕ\s]{4,})", texto_bureaux):
+                candidato = m.group(1).strip().split("\n")[0].strip()
+                if candidato.upper() == candidato and len(candidato) > 8:
+                    nome_real = candidato
+                    break
     except Exception:
         pass
 
@@ -251,6 +267,13 @@ def buscar(cpf: str, context) -> ResultadoCredito:
                 )
             page.goto(url, wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(800)
+
+        # Clica em Buscar (a URL preenche o campo mas não submete)
+        try:
+            page.get_by_role("button", name="Buscar").first.click(timeout=5000)
+            page.wait_for_timeout(1500)
+        except Exception:
+            pass
 
         # Sem resultados
         linhas = _ler_tabela(page)
