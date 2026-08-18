@@ -296,9 +296,8 @@ class LocalizaRequest(BaseModel):
 
 
 class PipelineRequest(BaseModel):
-    documento: str                # CPF ou CNPJ
-    nome: str = "Cliente"         # nome para a Movida (qualquer valor serve)
-    aguardar_movida_s: int = 40  # tempo de espera antes de ler resultado Movida
+    documento: str        # CPF ou CNPJ
+    nome: str = "Cliente" # nome para a Movida (qualquer valor serve)
 
 
 @app.post("/credito/localiza")
@@ -324,23 +323,21 @@ async def credito_pipeline(req: PipelineRequest):
     Pipeline completo de análise de crédito.
 
     Sequência:
-    1. B2E antifraude  (~5s)
-    2. Movida parte 1  — cria lead (~10s)
-    3. Movida parte 2  — lê portal B2B (~40s + OCR)
-    4. Localiza        — cria lead + pré-análise (~25s)
+    1. Movida parte 1  — cria lead (~10s)
+    2. B2E antifraude  — busca CPF e extrai nome real (~15s)
+    3. Localiza        — cria lead + pré-análise (~25s)
 
-    Retorna: {cliente, b2e, movida_envio, movida_resultado, localiza}
+    Retorna: {cliente, movida_envio, b2e, localiza}
     """
     if not _context:
         raise HTTPException(503, detail="Browser nao inicializado")
 
     async with _lock:
         loop = asyncio.get_event_loop()
-        import json as _json
 
         nome = req.nome
 
-        # 1. Movida parte1 — envia lead (cria o registro na Movida e dispara análise B2E)
+        # 1. Movida parte1 — envia lead
         envio = await loop.run_in_executor(
             _executor,
             lambda: enviar_lead(
@@ -355,52 +352,30 @@ async def credito_pipeline(req: PipelineRequest):
             ),
         )
 
-        # Extrai lead_id do JSON de resposta
-        lead_id = None
-        try:
-            lead_id = str(_json.loads(envio.resposta).get("leadId", ""))
-        except Exception:
-            pass
-
-        # 2. B2E — lê resultado antifraude gerado pela Movida
+        # 2. B2E — extrai nome real e dados do cliente
         b2e_res = await loop.run_in_executor(
             _executor,
             lambda: b2e_buscar(cpf=req.documento, context=_context),
         )
 
-        # Nome e email reais (extraídos da aba Bureaux do B2E)
-        bruto_b2e  = b2e_res.bruto or {}
-        nome_real  = bruto_b2e.get("nome_real") or nome
-        bureaux    = bruto_b2e.get("bureaux", {})
-        email_real = (bureaux.get("emails") or [None])[0]  # primeiro email do Bureaux
+        # Nome real extraído da aba Bureaux do B2E
+        bruto_b2e = b2e_res.bruto or {}
+        nome_real = bruto_b2e.get("nome_real") or nome
 
-        # 3. Movida parte2 — lê resultado do portal B2B (com retry interno)
-        movida_res = await loop.run_in_executor(
-            _executor,
-            lambda: ler_resultado(
-                documento=req.documento,
-                context=_context,
-                nome=nome_real,
-                aguardar_s=req.aguardar_movida_s,
-                lead_id=lead_id,
-            ),
-        )
-
-        # 4. Localiza — usa nome e email reais do B2E Bureaux
+        # 3. Localiza — usa nome real do B2E
         localiza_res = await loop.run_in_executor(
             _executor,
             lambda: _localiza.consultar(
-                Cliente(documento=req.documento, nome=nome_real, email=email_real),
+                Cliente(documento=req.documento, nome=nome_real),
                 _context,
             ),
         )
 
     return {
-        "cliente":          {"nome": nome_real, "documento": req.documento},
-        "b2e":              asdict(b2e_res),
-        "movida_envio":     asdict(envio),
-        "movida_resultado": asdict(movida_res),
-        "localiza":         asdict(localiza_res),
+        "cliente":      {"nome": nome_real, "documento": req.documento},
+        "movida_envio": asdict(envio),
+        "b2e":          asdict(b2e_res),
+        "localiza":     asdict(localiza_res),
     }
 
 
