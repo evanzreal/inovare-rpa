@@ -185,7 +185,7 @@ class Localiza:
             if not _fill(page, "Nome / Razão Social", cliente.nome):
                 _fill(page, "Nome", cliente.nome)
             _fill(page, "Celular",           _CELULAR)
-            _fill(page, "Email do prospect", cliente.email or _EMAIL_PROSPECT)
+            _fill(page, "Email do prospect", _EMAIL_PROSPECT)
             _fill(page, "Telefone",          _TELEFONE)
             _fill(page, "Email da revenda",  _EMAIL_REVENDA)
             _fill(page, "Descrição",         _DESCRICAO)
