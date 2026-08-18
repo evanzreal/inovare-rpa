@@ -368,29 +368,35 @@ async def credito_pipeline(req: PipelineRequest):
             lambda: b2e_buscar(cpf=req.documento, context=_context),
         )
 
+        # Nome e email reais (extraídos da aba Bureaux do B2E)
+        bruto_b2e  = b2e_res.bruto or {}
+        nome_real  = bruto_b2e.get("nome_real") or nome
+        bureaux    = bruto_b2e.get("bureaux", {})
+        email_real = (bureaux.get("emails") or [None])[0]  # primeiro email do Bureaux
+
         # 3. Movida parte2 — lê resultado do portal B2B (com retry interno)
         movida_res = await loop.run_in_executor(
             _executor,
             lambda: ler_resultado(
                 documento=req.documento,
                 context=_context,
-                nome=nome,
+                nome=nome_real,
                 aguardar_s=req.aguardar_movida_s,
                 lead_id=lead_id,
             ),
         )
 
-        # 4. Localiza
+        # 4. Localiza — usa nome e email reais do B2E Bureaux
         localiza_res = await loop.run_in_executor(
             _executor,
             lambda: _localiza.consultar(
-                Cliente(documento=req.documento, nome=nome),
+                Cliente(documento=req.documento, nome=nome_real, email=email_real),
                 _context,
             ),
         )
 
     return {
-        "cliente":          {"nome": nome, "documento": req.documento},
+        "cliente":          {"nome": nome_real, "documento": req.documento},
         "b2e":              asdict(b2e_res),
         "movida_envio":     asdict(envio),
         "movida_resultado": asdict(movida_res),

@@ -131,16 +131,31 @@ def _extrair(texto: str, campo: str) -> str:
 
 
 def _ler_resultado(page) -> str:
-    """
-    Lê o resultado de pré-aprovação da página aberta.
-    Suporta Lead ('Resultado Pré-análise') e Conta ('Cliente pré-aprovado?').
-    """
+    """Lê o campo Resultado Pré-análise (Lead) ou Cliente pré-aprovado (Conta)."""
     texto = page.evaluate("() => document.body.innerText") or ""
     return (
-        _extrair(texto, "Resultado Pré-análise")       # Lead (CPF)
-        or _extrair(texto, "Cliente pré-aprovado?")    # Conta (CNPJ)
-        or _extrair(texto, "Cliente pré-aprovado")     # variação sem '?'
+        _extrair(texto, "Resultado Pré-análise")
+        or _extrair(texto, "Cliente pré-aprovado?")
+        or _extrair(texto, "Cliente pré-aprovado")
     )
+
+
+def _ler_dados_lead(page) -> dict:
+    """Extrai todos os campos visíveis da página do lead."""
+    texto = page.evaluate("() => document.body.innerText") or ""
+    campos = [
+        "Resultado Pré-análise", "Cliente pré-aprovado",
+        "Nome completo", "Razão social", "CPF", "CNPJ",
+        "Email", "Telefone", "Celular",
+        "Status", "Segmento", "Carteira", "Categoria",
+        "Email do colaborador", "UF",
+    ]
+    dados = {}
+    for c in campos:
+        v = _extrair(texto, c)
+        if v and v != c:
+            dados[c] = v
+    return dados
 
 
 class Localiza:
@@ -170,7 +185,7 @@ class Localiza:
             if not _fill(page, "Nome / Razão Social", cliente.nome):
                 _fill(page, "Nome", cliente.nome)
             _fill(page, "Celular",           _CELULAR)
-            _fill(page, "Email do prospect", _EMAIL_PROSPECT)
+            _fill(page, "Email do prospect", cliente.email or _EMAIL_PROSPECT)
             _fill(page, "Telefone",          _TELEFONE)
             _fill(page, "Email da revenda",  _EMAIL_REVENDA)
             _fill(page, "Descrição",         _DESCRICAO)
@@ -190,21 +205,23 @@ class Localiza:
                 timeout=30000,
             )
 
-            # Aguarda Salesforce processar a pré-análise (~10s)
-            page.wait_for_timeout(10000)
-
-            resultado_raw = _ler_resultado(page)
-
-            # Se ainda vazio (análise ainda processando), tenta mais uma vez
-            if not resultado_raw:
-                page.wait_for_timeout(10000)
+            # Aguarda pré-análise concluir — reload até sair de "Em análise"
+            for tentativa in range(6):
+                page.wait_for_timeout(8000)
                 resultado_raw = _ler_resultado(page)
+                if resultado_raw and "análise" not in resultado_raw.lower():
+                    break
+                page.reload(wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(2000)
+
+            dados_lead = _ler_dados_lead(page)
 
             return ResultadoCredito(
                 status=_mapear(resultado_raw),
                 locadora="localiza",
                 documento=cpf_dig,
                 detalhe=resultado_raw or "resultado não encontrado",
+                bruto=dados_lead,
             )
 
         except Exception as exc:

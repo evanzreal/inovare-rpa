@@ -24,6 +24,7 @@ class Cliente:
     """Cliente que chega pra analise. 'documento' = CPF ou CNPJ."""
     documento: str
     nome: str = ""
+    email: str | None = None
     telefone: str | None = None
     regiao: str | None = None
     origem: str = ""  # ex.: id do card no CRM
