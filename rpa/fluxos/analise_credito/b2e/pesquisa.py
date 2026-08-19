@@ -241,10 +241,12 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
         if emails:
             bureaux["emails"] = list(dict.fromkeys(emails))  # dedup mantendo ordem
 
-        # Nome real em maiúsculas (ignora "Cliente Cliente")
-        nome_bureaux = bureaux.get("Nome", "")
-        if nome_bureaux and nome_bureaux.upper() == nome_bureaux and len(nome_bureaux) > 8:
-            nome_real = nome_bureaux
+        # Nome real — busca sequência toda em maiúsculas no texto do Bureaux
+        # (Assertiva retorna em CAPS; o campo "Nome" do pedido é mixed-case)
+        m_nome = re.search(r'\bNome\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ ]{8,})', texto_b)
+        if m_nome:
+            nome_real = m_nome.group(1).strip()
+            bureaux["Nome"] = nome_real
 
         resultado["bureaux"] = bureaux
         resultado["nome"] = nome_real
