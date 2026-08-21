@@ -210,13 +210,22 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
     # ── Aba Bureaux → CPF V2 - Assertiva ──
     nome_real = nome_cliente
     try:
-        page.locator("text=Bureaux").first.click(timeout=8000)
-        page.wait_for_timeout(2000)
+        # Clica na aba Bureaux e aguarda conteúdo aparecer (até 2 tentativas)
+        for tentativa_bureaux in range(2):
+            page.locator("text=Bureaux").first.click(timeout=8000)
+            page.wait_for_timeout(3000)
+            # Verifica se conteúdo da aba carregou
+            texto_teste = page.evaluate("() => document.body.innerText") or ""
+            if "CPF V2" in texto_teste or "Assertiva" in texto_teste or "Nome Da Mae" in texto_teste:
+                break
+            page.wait_for_timeout(2000)  # espera extra e tenta de novo
 
-        # Aguarda conteúdo da aba carregar
+        # Aguarda explicitamente o botão CPF V2 aparecer
+        cpf_v2_apareceu = False
         for sinal in ["text=CPF V2", "text=Assertiva", "text=Nome Da Mae"]:
             try:
-                page.wait_for_selector(sinal, timeout=5000)
+                page.wait_for_selector(sinal, timeout=8000)
+                cpf_v2_apareceu = True
                 break
             except Exception:
                 continue
@@ -224,11 +233,17 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
         # Clica no painel CPF V2 - Assertiva
         for btn in ["Cpf V2 - Assertiva", "CPF V2 - Assertiva", "CPF V2"]:
             try:
-                page.locator(f"text={btn}").first.click(timeout=4000)
-                page.wait_for_timeout(1500)
+                page.locator(f"text={btn}").first.click(timeout=5000)
+                page.wait_for_timeout(2500)
                 break
             except Exception:
                 continue
+
+        # Aguarda conteúdo do Assertiva carregar (nome da mãe é sinal seguro)
+        try:
+            page.wait_for_selector("text=Nome Da Mae", timeout=8000)
+        except Exception:
+            page.wait_for_timeout(2000)
 
         texto_b = page.evaluate("() => document.body.innerText") or ""
 

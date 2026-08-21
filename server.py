@@ -365,6 +365,21 @@ async def credito_pipeline(req: PipelineRequest):
         bruto_b2e = b2e_res.bruto or {}
         nome_real = bruto_b2e.get("nome_real") or nome
 
+        # Guardrail: nome não pode ser "Cliente" — se for, repete B2E
+        def _nome_invalido(n: str) -> bool:
+            return not n or "cliente" in n.lower()
+
+        if _nome_invalido(nome_real):
+            await asyncio.sleep(10)
+            b2e_retry = await loop.run_in_executor(
+                _executor,
+                lambda: b2e_buscar(cpf=req.documento, context=_context),
+            )
+            nome_retry = (b2e_retry.bruto or {}).get("nome_real") or ""
+            if not _nome_invalido(nome_retry):
+                b2e_res = b2e_retry
+                nome_real = nome_retry
+
         # 3. Localiza — usa nome real do B2E
         localiza_res = await loop.run_in_executor(
             _executor,
