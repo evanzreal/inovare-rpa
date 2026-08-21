@@ -176,6 +176,23 @@ class Localiza:
             _fill_cpf(page, cpf_fmt)
             page.wait_for_timeout(500)
             page.get_by_role("button", name="Avançar").click(timeout=10000)
+            page.wait_for_timeout(4000)
+
+            # Verifica se CPF já tem proposta ativa (Prospect Ativo)
+            texto_check = page.evaluate("() => document.body.innerText") or ""
+            if "Prospect Ativo" in texto_check or "proposta vigente" in texto_check:
+                dados = {}
+                for campo in ["Cliente", "CPF", "Status", "Validade da proposta"]:
+                    m = re.search(rf'{re.escape(campo)}:\s*([^\n]+)', texto_check)
+                    if m:
+                        dados[campo] = m.group(1).strip()
+                return ResultadoCredito(
+                    status=STATUS_PENDENTE,
+                    locadora="localiza",
+                    documento=cpf_dig,
+                    detalhe="Prospect Ativo — proposta vigente",
+                    bruto=dados,
+                )
 
             # Aguarda Tela 2 renderizar (LWC pode demorar)
             for sel in ["text=Nome / Razão Social", "text=Nome", "text=Razão Social", "text=Celular"]:

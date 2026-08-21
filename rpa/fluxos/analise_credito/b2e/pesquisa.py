@@ -145,7 +145,7 @@ def _extrair_campo(label: str, texto: str) -> str:
 def _ler_detalhe(page, cpf_limpo: str) -> dict:
     """
     Clica no primeiro resultado e extrai dados de todas as abas:
-    Alertas, Bureaux, Movimentação + painel esquerdo.
+    Painel inicial (Alertas), Bureaux (CPF V2 Assertiva), Movimentação.
     """
     try:
         page.wait_for_selector("table tbody tr", timeout=8000)
@@ -167,48 +167,40 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
     try:
         page.locator("table tbody tr").first.locator("a").click(timeout=8000)
         page.wait_for_load_state("networkidle", timeout=20000)
+        page.wait_for_timeout(1000)
     except Exception:
         return {"status_raw": status_raw, "alerta": "", "impeditiva": None, "nome": nome_cliente}
 
     resultado = {
-        "status_raw":  status_raw,
-        "nome":        nome_cliente,
-        "alerta":      "",
-        "impeditiva":  None,
-        "painel":      {},
-        "bureaux":     {},
+        "status_raw":   status_raw,
+        "nome":         nome_cliente,
+        "alerta":       "",
+        "impeditiva":   None,
+        "painel":       {},
+        "bureaux":      {},
         "movimentacao": [],
     }
 
-    # ── Painel esquerdo (Detalhes do Cliente + Pedido + Variáveis) ──
+    # ── Painel: extrai texto completo da página inicial (aba Alertas é padrão) ──
+    _CAMPOS_PAINEL = [
+        "CPF", "Data De Nascimento", "Sexo", "Estado Civil",
+        "Tipo Pedido", "Canal", "Loja de Retirada", "Vendedor",
+        "Valor FIPE", "Forma De Pagamento", "Parcelas",
+        "Telefone", "Celular",
+        "Endereço", "Bairro", "Cidade", "UF", "CEP",
+        "Renda Presumida", "Profissão", "Empresa",
+    ]
     try:
-        texto_esq = page.evaluate("""() => {
-            const esq = document.querySelector('[class*="col-md-4"], [class*="col-sm-4"]');
-            return esq ? esq.innerText : '';
-        }""") or ""
-        linhas_p = [l.strip() for l in texto_esq.split('\n') if l.strip()]
-        SKIP_P = {"Detalhes do Cliente", "Detalhes do pedido", "Powered by B2E Group",
-                  "Pesquisa", "Grupo", "Descrição", "Valor"}
+        texto_inicial = page.evaluate("() => document.body.innerText") or ""
         painel = {}
-        i = 0
-        while i < len(linhas_p) - 1:
-            chave = linhas_p[i]
-            valor = linhas_p[i + 1]
-            if (chave not in SKIP_P and not chave.startswith("R-")
-                    and len(chave) < 55 and not re.match(r"^\d", chave)):
-                painel[chave] = valor
-                i += 2
-            else:
-                i += 1
+        for campo in _CAMPOS_PAINEL:
+            v = _extrair_campo(campo, texto_inicial)
+            if v and v != campo and len(v) < 150:
+                painel[campo] = v
         resultado["painel"] = painel
-    except Exception:
-        pass
 
-    # ── Aba Alertas ──
-    try:
-        page.wait_for_selector("text=Impeditiva", timeout=8000)
-        texto_pg = page.evaluate("() => document.body.innerText") or ""
-        m = re.search(r"Impeditiva\s+(.+?)(?=\nVoltar|\Z)", texto_pg, re.DOTALL)
+        # Alerta de Impeditiva também está na aba inicial
+        m = re.search(r"Impeditiva\s+(.+?)(?=\n[A-Z][a-z]|\nVoltar|\Z)", texto_inicial, re.DOTALL)
         if m:
             resultado["alerta"] = m.group(1).strip().split("\n")[0]
     except Exception:
@@ -218,12 +210,22 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
     # ── Aba Bureaux → CPF V2 - Assertiva ──
     nome_real = nome_cliente
     try:
-        page.locator("text=Bureaux").first.click(timeout=5000)
-        page.wait_for_timeout(1500)
+        page.locator("text=Bureaux").first.click(timeout=8000)
+        page.wait_for_timeout(2000)
+
+        # Aguarda conteúdo da aba carregar
+        for sinal in ["text=CPF V2", "text=Assertiva", "text=Nome Da Mae"]:
+            try:
+                page.wait_for_selector(sinal, timeout=5000)
+                break
+            except Exception:
+                continue
+
+        # Clica no painel CPF V2 - Assertiva
         for btn in ["Cpf V2 - Assertiva", "CPF V2 - Assertiva", "CPF V2"]:
             try:
-                page.locator(f"text={btn}").first.click(timeout=3000)
-                page.wait_for_timeout(800)
+                page.locator(f"text={btn}").first.click(timeout=4000)
+                page.wait_for_timeout(1500)
                 break
             except Exception:
                 continue
@@ -232,17 +234,17 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
 
         bureaux = {}
         for campo in ["Nome", "Nome Da Mae", "Sexo", "Data De Nascimento",
-                      "Status Do CPF", "Renda", "Faixa", "Idade", "Descrição CBO", "Setor CBO"]:
+                      "Status Do CPF", "Renda", "Faixa", "Idade",
+                      "Descrição CBO", "Setor CBO"]:
             v = _extrair_campo(campo, texto_b)
             if v:
                 bureaux[campo] = v
 
         emails = re.findall(r"E-Mail\s+(\S+@\S+)", texto_b)
         if emails:
-            bureaux["emails"] = list(dict.fromkeys(emails))  # dedup mantendo ordem
+            bureaux["emails"] = list(dict.fromkeys(emails))
 
-        # Nome real — busca sequência toda em maiúsculas no texto do Bureaux
-        # (Assertiva retorna em CAPS; o campo "Nome" do pedido é mixed-case)
+        # Nome real em CAPS da Assertiva (ignora mixed-case do pedido)
         m_nome = re.search(r'\bNome\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ ]{8,})', texto_b)
         if m_nome:
             nome_real = m_nome.group(1).strip()
@@ -255,8 +257,13 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
 
     # ── Aba Movimentação ──
     try:
-        page.locator("text=Movimentação").first.click(timeout=5000)
-        page.wait_for_timeout(1500)
+        page.locator("text=Movimentação").first.click(timeout=8000)
+        page.wait_for_timeout(2000)
+        # Aguarda tabela carregar
+        try:
+            page.wait_for_selector("table tbody tr", timeout=5000)
+        except Exception:
+            pass
         rows = page.evaluate("""() => {
             return [...document.querySelectorAll('table tbody tr')]
                 .map(tr => [...tr.querySelectorAll('td')].map(td => td.innerText.trim()))
