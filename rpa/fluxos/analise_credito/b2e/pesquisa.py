@@ -318,6 +318,20 @@ def buscar(cpf: str, context) -> ResultadoCredito:
         except Exception:
             pass
 
+        # Aguarda B2E processar o lead (pode demorar ~15s após Movida submeter)
+        # Reload até aparecer resultado na tabela (máx ~25s)
+        for tentativa in range(5):
+            if _ler_tabela(page):
+                break
+            page.wait_for_timeout(5000)
+            page.reload(wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(1000)
+            try:
+                page.get_by_role("button", name="Buscar").first.click(timeout=3000)
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
+
         # Sem resultados
         linhas = _ler_tabela(page)
         if not linhas:
