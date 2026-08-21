@@ -10,6 +10,7 @@ Rodar:
 """
 
 import asyncio
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -31,6 +32,7 @@ _context = None
 _playwright = None
 _lock = asyncio.Lock()
 _executor = ThreadPoolExecutor(max_workers=1)
+_jobs: dict[str, dict] = {}
 
 
 def _abrir_browser():
@@ -317,84 +319,106 @@ async def credito_localiza(req: LocalizaRequest):
     return asdict(resultado)
 
 
+async def _executar_pipeline(job_id: str, req: PipelineRequest):
+    """Roda o pipeline em background e salva o resultado em _jobs[job_id]."""
+    try:
+        async with _lock:
+            loop = asyncio.get_event_loop()
+            nome = req.nome
+
+            # 1. Movida parte1 — envia lead
+            envio = await loop.run_in_executor(
+                _executor,
+                lambda: enviar_lead(
+                    nome=nome,
+                    cpf=req.documento,
+                    telefone=movida_config.TELEFONE,
+                    regiao=None,
+                    cod_vendedor=movida_config.COD_VENDEDOR,
+                    enviar=True,
+                    context=_context,
+                    salvar_print=True,
+                ),
+            )
+
+            # Aguarda B2E processar o lead da Movida
+            await asyncio.sleep(15)
+
+            # 2. B2E — extrai nome real e dados do cliente
+            b2e_res = await loop.run_in_executor(
+                _executor,
+                lambda: b2e_buscar(cpf=req.documento, context=_context),
+            )
+
+            bruto_b2e = b2e_res.bruto or {}
+            nome_real = bruto_b2e.get("nome_real") or nome
+
+            def _nome_invalido(n: str) -> bool:
+                return not n or "cliente" in n.lower()
+
+            if _nome_invalido(nome_real):
+                await asyncio.sleep(10)
+                b2e_retry = await loop.run_in_executor(
+                    _executor,
+                    lambda: b2e_buscar(cpf=req.documento, context=_context),
+                )
+                nome_retry = (b2e_retry.bruto or {}).get("nome_real") or ""
+                if not _nome_invalido(nome_retry):
+                    b2e_res = b2e_retry
+                    nome_real = nome_retry
+
+            # 3. Localiza — usa nome real do B2E
+            localiza_res = await loop.run_in_executor(
+                _executor,
+                lambda: _localiza.consultar(
+                    Cliente(documento=req.documento, nome=nome_real),
+                    _context,
+                ),
+            )
+
+        _jobs[job_id] = {
+            "status": "done",
+            "resultado": {
+                "cliente":      {"nome": nome_real, "documento": req.documento},
+                "movida_envio": asdict(envio),
+                "b2e":          asdict(b2e_res),
+                "localiza":     asdict(localiza_res),
+            },
+        }
+    except Exception as exc:
+        _jobs[job_id] = {"status": "erro", "detalhe": str(exc)}
+
+
 @app.post("/credito/pipeline")
 async def credito_pipeline(req: PipelineRequest):
     """
-    Pipeline completo de análise de crédito.
+    Pipeline completo de análise de crédito (async).
 
-    Sequência:
-    1. Movida parte 1  — cria lead (~10s)
-    2. B2E antifraude  — busca CPF e extrai nome real (~15s)
-    3. Localiza        — cria lead + pré-análise (~25s)
+    Retorna imediatamente um job_id. Consulte o resultado em:
+      GET /credito/jobs/{job_id}
 
-    Retorna: {cliente, movida_envio, b2e, localiza}
+    Sequência interna:
+    1. Movida parte 1  — cria lead
+    2. Aguarda 15s (B2E processar)
+    3. B2E antifraude  — extrai nome real da aba Bureaux
+    4. Localiza        — cria lead + pré-análise
     """
     if not _context:
         raise HTTPException(503, detail="Browser nao inicializado")
 
-    async with _lock:
-        loop = asyncio.get_event_loop()
+    job_id = uuid.uuid4().hex[:8]
+    _jobs[job_id] = {"status": "pending"}
+    asyncio.create_task(_executar_pipeline(job_id, req))
+    return {"job_id": job_id, "poll": f"/credito/jobs/{job_id}"}
 
-        nome = req.nome
 
-        # 1. Movida parte1 — envia lead
-        envio = await loop.run_in_executor(
-            _executor,
-            lambda: enviar_lead(
-                nome=nome,
-                cpf=req.documento,
-                telefone=movida_config.TELEFONE,
-                regiao=None,
-                cod_vendedor=movida_config.COD_VENDEDOR,
-                enviar=True,
-                context=_context,
-                salvar_print=True,
-            ),
-        )
-
-        # Aguarda B2E processar o lead da Movida
-        await asyncio.sleep(15)
-
-        # 2. B2E — extrai nome real e dados do cliente
-        b2e_res = await loop.run_in_executor(
-            _executor,
-            lambda: b2e_buscar(cpf=req.documento, context=_context),
-        )
-
-        # Nome real extraído da aba Bureaux do B2E
-        bruto_b2e = b2e_res.bruto or {}
-        nome_real = bruto_b2e.get("nome_real") or nome
-
-        # Guardrail: nome não pode ser "Cliente" — se for, repete B2E
-        def _nome_invalido(n: str) -> bool:
-            return not n or "cliente" in n.lower()
-
-        if _nome_invalido(nome_real):
-            await asyncio.sleep(10)
-            b2e_retry = await loop.run_in_executor(
-                _executor,
-                lambda: b2e_buscar(cpf=req.documento, context=_context),
-            )
-            nome_retry = (b2e_retry.bruto or {}).get("nome_real") or ""
-            if not _nome_invalido(nome_retry):
-                b2e_res = b2e_retry
-                nome_real = nome_retry
-
-        # 3. Localiza — usa nome real do B2E
-        localiza_res = await loop.run_in_executor(
-            _executor,
-            lambda: _localiza.consultar(
-                Cliente(documento=req.documento, nome=nome_real),
-                _context,
-            ),
-        )
-
-    return {
-        "cliente":      {"nome": nome_real, "documento": req.documento},
-        "movida_envio": asdict(envio),
-        "b2e":          asdict(b2e_res),
-        "localiza":     asdict(localiza_res),
-    }
+@app.get("/credito/jobs/{job_id}")
+async def get_pipeline_job(job_id: str):
+    """Retorna o status/resultado de um job de pipeline."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail="Job nao encontrado")
+    return job
 
 
 @app.post("/credito/movida")
