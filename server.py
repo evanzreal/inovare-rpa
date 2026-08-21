@@ -350,14 +350,18 @@ async def _executar_pipeline(job_id: str, req: PipelineRequest):
                 lambda: b2e_buscar(cpf=req.documento, context=_context),
             )
 
-            bruto_b2e = b2e_res.bruto or {}
-            nome_real = bruto_b2e.get("nome_real") or nome
-
             def _nome_invalido(n: str) -> bool:
                 return not n or "cliente" in n.lower()
 
-            if _nome_invalido(nome_real):
-                await asyncio.sleep(10)
+            bruto_b2e = b2e_res.bruto or {}
+            nome_real = bruto_b2e.get("nome_real") or nome
+
+            # Até 3 tentativas de B2E para obter nome válido
+            for _tentativa in range(3):
+                if not _nome_invalido(nome_real):
+                    break
+                print(f"[pipeline] nome inválido ({nome_real!r}), retry B2E tentativa {_tentativa + 1}/3")
+                await asyncio.sleep(12)
                 b2e_retry = await loop.run_in_executor(
                     _executor,
                     lambda: b2e_buscar(cpf=req.documento, context=_context),
@@ -366,6 +370,16 @@ async def _executar_pipeline(job_id: str, req: PipelineRequest):
                 if not _nome_invalido(nome_retry):
                     b2e_res = b2e_retry
                     nome_real = nome_retry
+
+            # Hard block: NUNCA chama Localiza com nome inválido
+            if _nome_invalido(nome_real):
+                _jobs[job_id] = {
+                    "status": "erro_nome",
+                    "detalhe": f"B2E não retornou nome válido para CPF {req.documento} após 3 tentativas — Localiza NÃO foi chamada",
+                    "movida_envio": asdict(envio),
+                    "b2e":          asdict(b2e_res),
+                }
+                return
 
             # 3. Localiza — usa nome real do B2E
             localiza_res = await loop.run_in_executor(

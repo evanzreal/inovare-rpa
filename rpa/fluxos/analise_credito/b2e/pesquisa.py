@@ -210,40 +210,47 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
     # ── Aba Bureaux → CPF V2 - Assertiva ──
     nome_real = nome_cliente
     try:
-        # Clica na aba Bureaux e aguarda conteúdo aparecer (até 2 tentativas)
-        for tentativa_bureaux in range(2):
-            page.locator("text=Bureaux").first.click(timeout=8000)
-            page.wait_for_timeout(3000)
-            # Verifica se conteúdo da aba carregou
+        # Clica na aba Bureaux — até 3 tentativas com waits crescentes
+        for tentativa_bureaux in range(3):
+            try:
+                page.locator("text=Bureaux").first.click(timeout=8000)
+            except Exception:
+                pass
+            espera = 3000 + tentativa_bureaux * 2000  # 3s, 5s, 7s
+            page.wait_for_timeout(espera)
             texto_teste = page.evaluate("() => document.body.innerText") or ""
             if "CPF V2" in texto_teste or "Assertiva" in texto_teste or "Nome Da Mae" in texto_teste:
                 break
-            page.wait_for_timeout(2000)  # espera extra e tenta de novo
 
         # Aguarda explicitamente o botão CPF V2 aparecer
-        cpf_v2_apareceu = False
         for sinal in ["text=CPF V2", "text=Assertiva", "text=Nome Da Mae"]:
             try:
-                page.wait_for_selector(sinal, timeout=8000)
-                cpf_v2_apareceu = True
+                page.wait_for_selector(sinal, timeout=10000)
                 break
             except Exception:
                 continue
 
-        # Clica no painel CPF V2 - Assertiva
-        for btn in ["Cpf V2 - Assertiva", "CPF V2 - Assertiva", "CPF V2"]:
+        # Clica no painel CPF V2 - Assertiva — até 3 tentativas
+        for _ in range(3):
+            clicou_cpfv2 = False
+            for btn in ["Cpf V2 - Assertiva", "CPF V2 - Assertiva", "CPF V2"]:
+                try:
+                    page.locator(f"text={btn}").first.click(timeout=5000)
+                    clicou_cpfv2 = True
+                    break
+                except Exception:
+                    continue
+            if clicou_cpfv2:
+                break
+            page.wait_for_timeout(3000)
+
+        # Aguarda conteúdo do Assertiva carregar — nome da mãe é sinal seguro
+        for _ in range(2):
             try:
-                page.locator(f"text={btn}").first.click(timeout=5000)
-                page.wait_for_timeout(2500)
+                page.wait_for_selector("text=Nome Da Mae", timeout=10000)
                 break
             except Exception:
-                continue
-
-        # Aguarda conteúdo do Assertiva carregar (nome da mãe é sinal seguro)
-        try:
-            page.wait_for_selector("text=Nome Da Mae", timeout=8000)
-        except Exception:
-            page.wait_for_timeout(2000)
+                page.wait_for_timeout(3000)
 
         texto_b = page.evaluate("() => document.body.innerText") or ""
 
@@ -259,11 +266,15 @@ def _ler_detalhe(page, cpf_limpo: str) -> dict:
         if emails:
             bureaux["emails"] = list(dict.fromkeys(emails))
 
-        # Nome real em CAPS da Assertiva (ignora mixed-case do pedido)
-        m_nome = re.search(r'\bNome\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ ]{8,})', texto_b)
+        # Nome real em CAPS da Assertiva — ignora mixed-case do pedido
+        m_nome = re.search(r'\bNome\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ ]{4,})', texto_b)
         if m_nome:
-            nome_real = m_nome.group(1).strip()
-            bureaux["Nome"] = nome_real
+            candidato = m_nome.group(1).strip()
+            # Garante que é realmente ALL CAPS (pelo menos 60% maiúsculas)
+            letras = [c for c in candidato if c.isalpha()]
+            if letras and sum(1 for c in letras if c.isupper()) / len(letras) >= 0.6:
+                nome_real = candidato
+                bureaux["Nome"] = nome_real
 
         resultado["bureaux"] = bureaux
         resultado["nome"] = nome_real
