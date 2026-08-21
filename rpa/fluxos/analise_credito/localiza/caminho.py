@@ -177,8 +177,13 @@ class Localiza:
             page.wait_for_timeout(500)
             page.get_by_role("button", name="Avançar").click(timeout=10000)
 
-            # Aguarda Tela 2 renderizar (LWC precisa de tempo)
-            page.wait_for_selector("text=Nome / Razão Social", timeout=15000)
+            # Aguarda Tela 2 renderizar (LWC pode demorar)
+            for sel in ["text=Nome / Razão Social", "text=Nome", "text=Razão Social", "text=Celular"]:
+                try:
+                    page.wait_for_selector(sel, timeout=25000)
+                    break
+                except Exception:
+                    continue
             page.wait_for_timeout(1500)
 
             # Tela 2: dados do lead
