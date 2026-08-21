@@ -352,6 +352,9 @@ async def credito_pipeline(req: PipelineRequest):
             ),
         )
 
+        # Aguarda B2E processar o lead da Movida
+        await asyncio.sleep(15)
+
         # 2. B2E — extrai nome real e dados do cliente
         b2e_res = await loop.run_in_executor(
             _executor,
